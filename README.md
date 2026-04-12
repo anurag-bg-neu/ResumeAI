@@ -2,13 +2,11 @@
 
 ATS resume analyzer — upload a resume PDF and job description, get a match score with skill gap analysis, and download a tailored resume with missing skills injected.
 
-**Course:** CS 5100 — Foundations of AI, Northeastern University
-
 ![ResumeAI Demo](demo.gif)
 
 ## Project Structure
 
-```
+```text
 ResumeAI/
 ├── backend/
 │   ├── api/main.py                 ← FastAPI (2 endpoints)
@@ -31,7 +29,7 @@ ResumeAI/
 
 ## Pipeline
 
-```
+```text
 Resume PDF + JD text
   → Stage 1: parse_resume() + parse_jd()
   → Stage 2: score_resume() — TF-IDF + semantic (all-MiniLM-L6-v2) + gap analysis
@@ -94,7 +92,7 @@ curl -X POST http://localhost:8000/api/analyze \
   -F "jd_text=Software Engineer. Requirements: Python, React, Node.js, SQL."
 
 # Option 3: Swagger UI
-# http://localhost:8000/docs → Try it out
+ http://localhost:8000/docs
 ```
 
 ## Tech Stack
