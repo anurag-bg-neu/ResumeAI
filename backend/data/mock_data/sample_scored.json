@@ -1,0 +1,255 @@
+{
+  "scored_sections": {
+    "experience": [
+      {
+        "company": "Web Development (CS 4550) - Northeastern University",
+        "title": "Teaching Assistant",
+        "dates": "Jan 2026 - Present",
+        "location": "Boston, MA",
+        "bullets": [
+          {
+            "text": "Conduct code reviews for 100+ student assignments and projects; elevate code quality and adherence to specifications through detailed feedback on architecture and implementation",
+            "semantic_score": 0.3309,
+            "best_match_requirement": "Own end-to-end feature execution, from development, code reviews, and testing to automation and production release.",
+            "keyword_score": 0.1635
+          },
+          {
+            "text": "Lead office hours and one-on-one mentoring sessions, boosting students' proficiency in MERN stack (React, Node.js, Express, MongoDB Redux) and web fundamentals (HTML, CSS, JavaScript, TypeScript)",
+            "semantic_score": 0.7017,
+            "best_match_requirement": "Proficiency in HTML, CSS, JavaScript, and TypeScript, along with hands-on experience using frameworks such as React and Angular, and server-side development with Node.js.",
+            "keyword_score": 0.3733
+          }
+        ],
+        "section_weight": 1.5,
+        "avg_relevance": 0.5163
+      },
+      {
+        "company": "QSpiders Global, Bangalore, India",
+        "title": "Full Stack Developer",
+        "dates": "Aug 2024 - Aug 2025",
+        "location": "",
+        "bullets": [
+          {
+            "text": "Built and maintained full-stack web applications using Python, Django, and React; optimized database queries achieving 40% performance improvement on data-heavy operations",
+            "semantic_score": 0.3287,
+            "best_match_requirement": "3\u20135 years of experience in web development, with a strong foundation in modern front-end and back-end technologies.",
+            "keyword_score": 0.0677
+          },
+          {
+            "text": "Developed responsive UI components with TypeScript and Tailwind CSS; reduced page load times by 22% through code splitting, image optimization, and caching strategies",
+            "semantic_score": 0.4299,
+            "best_match_requirement": "Proven ability to optimize for speed, scalability, and accessibility, while adhering to SEO best practices and ensuring cross-browser and cross-device compatibility.",
+            "keyword_score": 0.0897
+          },
+          {
+            "text": "Designed and optimized Oracle SQL databases using normalization, indexing, and stored procedures for high-traffic applications; collaborated with DevOps team to maintain AWS EC2/S3 infrastructure supporting 99.9% uptime",
+            "semantic_score": 0.3142,
+            "best_match_requirement": "Experienced with version control systems (e.g., Git) and collaboration tools such as Jira, ensuring effective task management and workflow tracking.",
+            "keyword_score": 0.0357
+          },
+          {
+            "text": "Mentored 50+ professionals transitioning into tech, leading workshops on Web Development, Figma, and Project management.",
+            "semantic_score": 0.476,
+            "best_match_requirement": "3\u20135 years of experience in web development, with a strong foundation in modern front-end and back-end technologies.",
+            "keyword_score": 0.1008
+          }
+        ],
+        "section_weight": 1.5,
+        "avg_relevance": 0.3872
+      },
+      {
+        "company": "Konigtronics Pvt. Ltd., Bangalore, India",
+        "title": "Software Development Intern",
+        "dates": "Sep 2023 - Nov 2023",
+        "location": "",
+        "bullets": [
+          {
+            "text": "Led data-driven sales analysis for commercial automobile client using Pandas, NumPy, and PySpark; reduced data preprocessing time by 60%, enabling faster market insights",
+            "semantic_score": 0.2294,
+            "best_match_requirement": "Eagerness to learn, adapt, and mentor within a fast-moving product team.",
+            "keyword_score": 0.043
+          },
+          {
+            "text": "Built ML models deployed via Flask API and MongoDB for real-time sales predictions; models informed strategy that contributed to quarterly revenue growth",
+            "semantic_score": 0.2528,
+            "best_match_requirement": "Own end-to-end feature execution, from development, code reviews, and testing to automation and production release.",
+            "keyword_score": 0.0
+          },
+          {
+            "text": "Engineered interactive dashboards using Matplotlib, Seaborn, and Plotly; presented findings to stakeholders and leadership team",
+            "semantic_score": 0.3365,
+            "best_match_requirement": "Experiment with emerging AI tools and frameworks under guidance from senior engineers, identifying opportunities to improve efficiency or user engagement.",
+            "keyword_score": 0.0507
+          },
+          {
+            "text": "Led 10-member engineering team in Agile environment to develop cross-platform mobile app using React Native, TypeScript, and Firebase; shipped 100% of planned features within 8 weeks",
+            "semantic_score": 0.4267,
+            "best_match_requirement": "Collaborate closely with architects, technical leads, product managers, UX designers, and fellow engineers to understand requirements and deliver effective solutions.",
+            "keyword_score": 0.1099
+          }
+        ],
+        "section_weight": 1.5,
+        "avg_relevance": 0.3114
+      },
+      {
+        "company": "Software Development Intern",
+        "title": "Contriver, Bangalore, India",
+        "dates": "Jan 2024 - Mar 2024",
+        "location": "",
+        "bullets": [
+          {
+            "text": "Developed a full-stack restaurant platform using Next.js, TypeScript, and Tailwind CSS; integrated Google Maps SDK and REST APIs for real-time dynamic content and geolocation features",
+            "semantic_score": 0.4105,
+            "best_match_requirement": "Proven ability to optimize for speed, scalability, and accessibility, while adhering to SEO best practices and ensuring cross-browser and cross-device compatibility.",
+            "keyword_score": 0.1469
+          },
+          {
+            "text": "Implemented CI/CD pipelines using Git and Vercel for automated deployment with fast rollbacks and enhanced SEO optimization across mobile and desktop platforms",
+            "semantic_score": 0.4037,
+            "best_match_requirement": "Experienced with version control systems (e.g., Git) and collaboration tools such as Jira, ensuring effective task management and workflow tracking.",
+            "keyword_score": 0.0789
+          }
+        ],
+        "section_weight": 1.5,
+        "avg_relevance": 0.4071
+      }
+    ],
+    "projects": [
+      {
+        "name": "Stella",
+        "description": "Gamified savings app: users raise digital pets by maintaining deposit streaks, turning financial discipline into a game with on-chain staking.",
+        "bullets": [
+          {
+            "text": "Built React + TypeScript + Framer Motion frontend with real-time pet stats and competitive leaderboards; custom Rust smart contracts (Soroban) for staking and streak validation",
+            "semantic_score": 0.2849,
+            "best_match_requirement": "Proficiency in HTML, CSS, JavaScript, and TypeScript, along with hands-on experience using frameworks such as React and Angular, and server-side development with Node.js.",
+            "keyword_score": 0.0657
+          },
+          {
+            "text": "Node.js + Express backend with Supabase; integrated Freighter wallet for XLM transactions",
+            "semantic_score": 0.2466,
+            "best_match_requirement": "As a key member of our Web development team, you will design and develop core components of the Messaging Platform\u2014including Chat, Inbox, and Email SDKs\u2014and integrate them across multiple PayPal ecosystems such as PayPal, Venmo, and Hyperwallet. Your work will directly contribute to creating seamless, intuitive user experiences that keep customers engaged and empowered to self-serve.",
+            "keyword_score": 0.1289
+          }
+        ],
+        "section_weight": 1.0,
+        "avg_relevance": 0.2657
+      },
+      {
+        "name": "CryptoCribs",
+        "description": "Decentralized Airbnb: eliminates 15%+ fees, adds escrow trust model, and enables cross-border payments via XRPL/Flare settlement.",
+        "bullets": [
+          {
+            "text": "Built Next.js + TypeScript frontend with MetaMask/GemWallet integrations; designed Solidity smart contracts for escrow, booking logic and NFT loyalty rewards",
+            "semantic_score": 0.3868,
+            "best_match_requirement": "Proficiency in HTML, CSS, JavaScript, and TypeScript, along with hands-on experience using frameworks such as React and Angular, and server-side development with Node.js.",
+            "keyword_score": 0.0757
+          },
+          {
+            "text": "Deployed on AWS with MySQL backend; architected on-chain dispute resolution and concurrent booking handling",
+            "semantic_score": 0.2338,
+            "best_match_requirement": "Experienced with version control systems (e.g., Git) and collaboration tools such as Jira, ensuring effective task management and workflow tracking.",
+            "keyword_score": 0.0
+          }
+        ],
+        "section_weight": 1.0,
+        "avg_relevance": 0.3103
+      },
+      {
+        "name": "ArogyaMate",
+        "description": "Culturally aware health app: personalizes nutrition guidance for diverse dietary preferences (pregnancy, illness, menstruation) with food label scanning and multi-language support.",
+        "bullets": [
+          {
+            "text": "Built React + TypeScript + Vite frontend with specialized features (Cravings Manager, Sickness Mode, Period Support); integrated",
+            "semantic_score": 0.4174,
+            "best_match_requirement": "Proficiency in HTML, CSS, JavaScript, and TypeScript, along with hands-on experience using frameworks such as React and Angular, and server-side development with Node.js.",
+            "keyword_score": 0.0799
+          },
+          {
+            "text": "OpenCV + Tesseract OCR for food label scanning (~85% accuracy)",
+            "semantic_score": 0.0432,
+            "best_match_requirement": null,
+            "keyword_score": 0.0
+          },
+          {
+            "text": "Connected Firebase auth with third-party nutrition APIs and cultural food databases for inclusive, personalized recommendations",
+            "semantic_score": 0.1627,
+            "best_match_requirement": "We\u2019re looking for engineers who are innovative, curious, and quick learners, with a passion for building scalable, user-centric solutions. You\u2019ll collaborate closely with product managers, architects, and cross-functional teams to understand business goals and deliver next-generation self-service experiences that transform how billions of users resolve issues independently.",
+            "keyword_score": 0.0
+          }
+        ],
+        "section_weight": 1.0,
+        "avg_relevance": 0.2078
+      }
+    ],
+    "education": [
+      {
+        "school": "Northeastern University, Boston, MA",
+        "degree": "Master of Science in Computer Science",
+        "dates": "Sep 2025 - Present",
+        "details": [
+          "GPA: 3.85"
+        ]
+      },
+      {
+        "school": "Vivekananda Institute of Technology, Bangalore, India",
+        "degree": "B.E in Computer Science and Engineering",
+        "dates": "Dec 2021 - June 2025",
+        "details": [
+          "GPA: 3.7"
+        ]
+      }
+    ],
+    "skills": [
+      "Python",
+      "Java",
+      "JavaScript",
+      "React",
+      "Next.js",
+      "Vite",
+      "HTML5",
+      "CSS3",
+      "Django",
+      "Express",
+      "Node.js",
+      "Bootstrap",
+      "shadcn/ui",
+      "MySQL",
+      "MongoDB",
+      "pandas",
+      "NumPy",
+      "Matplotlib",
+      "Seaborn",
+      "AWS (EC2",
+      "S3)",
+      "Firebase",
+      "Vercel",
+      "Git",
+      "GitHub",
+      "CI/CD",
+      "Object-Oriented Programming",
+      "Software Testing (JUnit)",
+      "Data Structures & Algorithms",
+      "Agile/Scrum"
+    ]
+  },
+  "skills_analysis": {
+    "covered": [
+      "Agile",
+      "CSS",
+      "Git",
+      "HTML",
+      "JavaScript",
+      "React",
+      "Scrum",
+      "TypeScript"
+    ],
+    "missing": [
+      "Angular",
+      "Jira"
+    ],
+    "partial_match": []
+  },
+  "overall_semantic_score": 0.4598,
+  "overall_keyword_score": 0.0767
+}

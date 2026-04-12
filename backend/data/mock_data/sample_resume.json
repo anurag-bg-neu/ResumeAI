@@ -1,0 +1,135 @@
+{
+  "contact": {
+    "name": "Milan Srinivas",
+    "email": "srinivas.mi@northeastern.edu",
+    "phone": "617-555-0192"
+  },
+  "sections": {
+    "experience": [
+      {
+        "company": "Contriver",
+        "title": "Full Stack Developer",
+        "dates": "Jan 2022 - Dec 2023",
+        "location": "India",
+        "bullets": [
+          "Built REST APIs using Django serving 50K+ daily active users with 99.9% uptime",
+          "Designed PostgreSQL database schema for patient records, reducing query latency by 40%",
+          "Led weekly standups with 5-person engineering team and coordinated sprint planning",
+          "Implemented JWT-based authentication and role-based access control for 3 user tiers",
+          "Migrated legacy monolith to microservices architecture using Docker and Kubernetes",
+          "Wrote unit and integration tests achieving 87% code coverage using pytest",
+          "Integrated third-party payment APIs (Razorpay, Stripe) handling ₹2M+ monthly volume",
+          "Optimised slow database queries using EXPLAIN ANALYSE, cutting p95 latency from 800ms to 120ms",
+          "Maintained CI/CD pipelines on GitHub Actions with automated linting and deployment",
+          "Mentored 2 junior developers through code reviews and pair programming sessions"
+        ]
+      },
+      {
+        "company": "InnovateTech",
+        "title": "Software Engineering Intern",
+        "dates": "May 2021 - Aug 2021",
+        "location": "Remote",
+        "bullets": [
+          "Built internal admin dashboard using React and TypeScript to surface real-time analytics",
+          "Wrote Python scripts to automate ETL pipeline, saving 4 hours of manual work weekly",
+          "Collaborated with design team to implement responsive UI components using Tailwind CSS",
+          "Participated in Agile sprints, daily standups, and retrospectives"
+        ]
+      }
+    ],
+    "education": [
+      {
+        "school": "Northeastern University",
+        "degree": "MS Computer Science",
+        "dates": "Sep 2024 - May 2027",
+        "details": [
+          "GPA: 3.9",
+          "Relevant coursework: Foundations of AI, Algorithms, Distributed Systems, NLP"
+        ]
+      },
+      {
+        "school": "Anna University",
+        "degree": "BE Computer Science",
+        "dates": "Aug 2017 - May 2021",
+        "details": [
+          "GPA: 8.7 / 10",
+          "Graduated with distinction"
+        ]
+      }
+    ],
+    "skills": [
+      "Python",
+      "JavaScript",
+      "TypeScript",
+      "Java",
+      "React",
+      "Node.js",
+      "Django",
+      "Flask",
+      "PostgreSQL",
+      "MongoDB",
+      "Redis",
+      "AWS",
+      "Docker",
+      "Kubernetes",
+      "CI/CD",
+      "REST APIs",
+      "GraphQL",
+      "Git",
+      "Linux",
+      "Tailwind CSS"
+    ],
+    "projects": [
+      {
+        "name": "Stella",
+        "description": "Gamified blockchain savings app",
+        "bullets": [
+          "Built frontend with React/TypeScript and integrated with Ethereum smart contracts via Web3.js",
+          "Designed Solidity smart contracts for escrow-based savings goals with automatic release",
+          "Deployed on AWS EC2 with Nginx reverse proxy and achieved 200ms average response time",
+          "Won 2nd place at Northeastern Hackathon 2024 (120+ teams)"
+        ]
+      },
+      {
+        "name": "SmartResume",
+        "description": "AI-powered resume optimiser using NLP",
+        "bullets": [
+          "Built TF-IDF + semantic similarity pipeline using Scikit-learn and Sentence-Transformers",
+          "Exposed REST API with FastAPI, containerised with Docker, deployed on GCP Cloud Run",
+          "Reduced average job-application time by 60% in user study with 25 participants"
+        ]
+      }
+    ]
+  },
+  "all_skills_detected": [
+    "AWS",
+    "Agile",
+    "CI/CD",
+    "Django",
+    "Docker",
+    "Ethereum",
+    "FastAPI",
+    "Flask",
+    "GCP",
+    "Git",
+    "GraphQL",
+    "Java",
+    "JavaScript",
+    "Kubernetes",
+    "Linux",
+    "Machine Learning",
+    "MongoDB",
+    "NLP",
+    "Nginx",
+    "Node.js",
+    "Pandas",
+    "PostgreSQL",
+    "Python",
+    "REST APIs",
+    "React",
+    "Redis",
+    "Scikit-learn",
+    "Tailwind CSS",
+    "TypeScript"
+  ]
+}

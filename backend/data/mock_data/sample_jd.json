@@ -1,0 +1,75 @@
+{
+  "title": "Backend Software Engineer",
+  "company": "Amazon",
+  "requirements": {
+    "required_skills": [
+      "Python",
+      "AWS",
+      "REST APIs",
+      "PostgreSQL",
+      "Docker"
+    ],
+    "preferred_skills": [
+      "Kubernetes",
+      "CI/CD",
+      "Kafka",
+      "Terraform"
+    ],
+    "experience_years": 3,
+    "requirement_sentences": [
+      {
+        "text": "Build and maintain scalable backend services handling millions of requests per day",
+        "type": "required"
+      },
+      {
+        "text": "3+ years of experience in backend software development",
+        "type": "required"
+      },
+      {
+        "text": "Strong proficiency in Python and familiarity with at least one other backend language",
+        "type": "required"
+      },
+      {
+        "text": "Experience designing and consuming REST APIs in production environments",
+        "type": "required"
+      },
+      {
+        "text": "Hands-on experience with AWS services such as EC2, S3, Lambda, and RDS",
+        "type": "required"
+      },
+      {
+        "text": "Design and implement relational database schemas; PostgreSQL experience required",
+        "type": "required"
+      },
+      {
+        "text": "Collaborate with cross-functional teams including product, design, and data science",
+        "type": "required"
+      },
+      {
+        "text": "Contribute to architecture discussions, code reviews, and technical documentation",
+        "type": "required"
+      },
+      {
+        "text": "Experience with containerisation using Docker is required",
+        "type": "required"
+      },
+      {
+        "text": "Knowledge of Kubernetes or other container orchestration platforms is a plus",
+        "type": "preferred"
+      },
+      {
+        "text": "Familiarity with CI/CD pipelines (GitHub Actions, Jenkins, CircleCI) preferred",
+        "type": "preferred"
+      },
+      {
+        "text": "Experience with event-driven architectures and message queues such as Kafka is a nice-to-have",
+        "type": "preferred"
+      },
+      {
+        "text": "Infrastructure-as-code experience with Terraform or CloudFormation is a bonus",
+        "type": "preferred"
+      }
+    ]
+  },
+  "raw_text": "Backend Software Engineer\nAmazon\n\nAbout the Role\nWe are looking for a talented Backend Software Engineer to join our Payments Infrastructure team in Seattle. You will build and maintain scalable backend services handling millions of requests per day.\n\nRequirements\n- 3+ years of experience in backend software development\n- Strong proficiency in Python and familiarity with at least one other backend language\n- Experience designing and consuming REST APIs in production environments\n- Hands-on experience with AWS services such as EC2, S3, Lambda, and RDS\n- Design and implement relational database schemas; PostgreSQL experience required\n- Collaborate with cross-functional teams including product, design, and data science\n- Contribute to architecture discussions, code reviews, and technical documentation\n- Experience with containerisation using Docker is required\n\nPreferred\n- Knowledge of Kubernetes or other container orchestration platforms is a plus\n- Familiarity with CI/CD pipelines (GitHub Actions, Jenkins, CircleCI) preferred\n- Experience with event-driven architectures and message queues such as Kafka is a nice-to-have\n- Infrastructure-as-code experience with Terraform or CloudFormation is a bonus\n"
+}

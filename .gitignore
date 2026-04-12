@@ -1,0 +1,12 @@
+"results/data/sample_jds/data/sample_resumes/*.pdf"
+__pycache__/
+*.pyc
+
+# API jobs directory
+_jobs/
+test_output.pdf
+
+# Frontend
+frontend/node_modules/
+frontend/.next/
+frontend/out/
