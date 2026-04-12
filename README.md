@@ -94,7 +94,7 @@ curl -X POST http://localhost:8000/api/analyze \
   -F "jd_text=Software Engineer. Requirements: Python, React, Node.js, SQL."
 
 # Option 3: Swagger UI
-# http://localhost:8000/docs → Try it out
+ http://localhost:8000/docs
 ```
 
 ## Tech Stack
