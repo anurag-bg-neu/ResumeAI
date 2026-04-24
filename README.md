@@ -2,7 +2,7 @@
 
 ATS resume analyzer — upload a resume PDF and job description, get a match score with skill gap analysis, and download a tailored resume with missing skills injected.
 
-**Course:** CS 5100 — Foundations of AI, Northeastern University
+#Demo
 
 ![ResumeAI Demo](demo.gif)
 
