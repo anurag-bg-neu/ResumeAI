@@ -2,7 +2,7 @@
 
 ATS resume analyzer — upload a resume PDF and job description, get a match score with skill gap analysis, and download a tailored resume with missing skills injected.
 
-#Demo
+# Demo
 
 ![ResumeAI Demo](demo.gif)
 
