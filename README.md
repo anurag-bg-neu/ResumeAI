@@ -8,7 +8,7 @@ ATS resume analyzer — upload a resume PDF and job description, get a match sco
 
 ## Project Structure
 
-```
+```text
 ResumeAI/
 ├── backend/
 │   ├── api/main.py                 ← FastAPI (2 endpoints)
@@ -31,7 +31,7 @@ ResumeAI/
 
 ## Pipeline
 
-```
+```text
 Resume PDF + JD text
   → Stage 1: parse_resume() + parse_jd()
   → Stage 2: score_resume() — TF-IDF + semantic (all-MiniLM-L6-v2) + gap analysis
