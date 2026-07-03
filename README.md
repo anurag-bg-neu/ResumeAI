@@ -90,7 +90,7 @@ python test_api.py
 
 # Option 2: curl
 curl -X POST http://localhost:8000/api/analyze \
-  -F "resume=@data/sample_resumes/milan.pdf" \
+  -F "resume=@data/sample_resumes/resume.pdf" \
   -F "jd_text=Software Engineer. Requirements: Python, React, Node.js, SQL."
 
 # Option 3: Swagger UI
