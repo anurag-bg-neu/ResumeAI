@@ -10,3 +10,4 @@ test_output.pdf
 frontend/node_modules/
 frontend/.next/
 frontend/out/
+report.pdf
