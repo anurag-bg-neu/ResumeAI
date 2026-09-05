@@ -1,6 +1,6 @@
 # ResumeAI
 
-ATS resume analyzer — upload a resume PDF and job description, get a match score with skill gap analysis, and download a tailored resume with missing skills injected.
+ATS resume analyzer - upload a resume PDF and job description, get a match score with skill gap analysis, and download a tailored resume with missing skills injected.
 
 # Demo
 
@@ -34,7 +34,7 @@ ResumeAI/
 ```text
 Resume PDF + JD text
   → Stage 1: parse_resume() + parse_jd()
-  → Stage 2: score_resume() — TF-IDF + semantic (all-MiniLM-L6-v2) + gap analysis
+  → Stage 2: score_resume() - TF-IDF + semantic (all-MiniLM-L6-v2) + gap analysis
   → Stage 3: assemble_resume() → inject_missing_skills() → generate_resume_pdf()
   → Tailored PDF + score dashboard
 ```
