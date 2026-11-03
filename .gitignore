@@ -1,13 +1,30 @@
-"results/data/sample_jds/data/sample_resumes/*.pdf"
+# Python
 __pycache__/
 *.pyc
+*.egg-info/
+.venv/
+venv/
 
-# API jobs directory
-_jobs/
+# Build / run artifacts
+backend/results/
+backend/_jobs/
 test_output.pdf
+report.pdf
+
+# Real resumes are personal data — keep them out of git.
+# The one synthetic fixture the README and tests rely on is the exception.
+backend/data/sample_resumes/*.pdf
+!backend/data/sample_resumes/resume.pdf
 
 # Frontend
 frontend/node_modules/
 frontend/.next/
 frontend/out/
-report.pdf
+
+# Env
+.env
+.env.local
+
+# Editor / local tooling
+.vscode/
+.idea/
