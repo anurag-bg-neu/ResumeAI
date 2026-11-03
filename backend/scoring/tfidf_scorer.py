@@ -1,6 +1,6 @@
 """
-baseline_tfidf.py
------------------
+tfidf_scorer.py
+---------------
 This is the "dumb" baseline model. It treats every bullet and every JD requirement
 as a bag of words, then measures how much they overlap using TF-IDF + cosine similarity.
 

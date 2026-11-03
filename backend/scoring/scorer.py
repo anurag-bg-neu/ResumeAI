@@ -10,9 +10,9 @@ Public API:
 
 import logging
 
-from .baseline_tfidf import compute_overall_keyword_score, score_with_tfidf
 from .gap_analysis import analyze_skill_gaps
 from .semantic_scorer import compute_overall_semantic_score, score_with_semantic
+from .tfidf_scorer import compute_overall_keyword_score, score_with_tfidf
 
 log = logging.getLogger(__name__)
 
