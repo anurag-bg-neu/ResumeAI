@@ -12,7 +12,7 @@ Runs one master resume against multiple JDs and produces:
   3. A heatmap PNG via seaborn / matplotlib
 
 Public API:
-    from person3_generation.multi_jd_compare import run_multi_jd_comparison
+    from generation.multi_jd_compare import run_multi_jd_comparison
 """
 
 from __future__ import annotations

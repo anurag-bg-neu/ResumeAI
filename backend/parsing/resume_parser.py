@@ -4,7 +4,7 @@ resume_parser.py — Structured résumé parser for the ResumeAI pipeline.
 Public API:
     parse_resume(file_path: str) -> dict
 
-The returned dict strictly matches the Person-1 → Person-2 JSON contract:
+The returned dict strictly matches the Stage 1 → Stage 2 JSON contract:
 
     {
       "contact": {"name": str, "email": str, "phone": str},
@@ -641,7 +641,7 @@ def parse_projects(section_text: str) -> list[dict]:
             if not entry_starts or start > entry_starts[-1]:
                 entry_starts.append(start)
 
-    # Fallback: separator-based (Anurag format)
+    # Fallback: separator-based header (e.g. "Role | Company | Dates")
     if not entry_starts:
         _sep = re.compile(r"\s+[|–—]\s+")
         for i, ln in enumerate(lines):
@@ -999,7 +999,7 @@ def extract_courses_from_education_text(section_text: str) -> dict[str, str]:
 
 def parse_resume(file_path: str) -> dict:
     """
-    Parse a résumé PDF into the Person-1 → Person-2 JSON contract.
+    Parse a résumé PDF into the Stage 1 → Stage 2 JSON contract.
 
     Args:
         file_path: Absolute or relative path to the PDF file.

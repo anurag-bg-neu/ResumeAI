@@ -14,12 +14,11 @@ We also do section weighting: experience bullets count more than education bulle
 because the JD is for a software engineering role (not a research or academic position).
 """
 
-import json
-from sentence_transformers import SentenceTransformer, util
+from .embeddings import cos_sim, encode
 
-
-# load the model once at module level so we don't reload it every function call
-model = SentenceTransformer("all-MiniLM-L6-v2")
+# Below this similarity, a "best match" is noise rather than a real match, so we
+# report no matching requirement at all.
+MATCH_FLOOR: float = 0.1
 
 
 def get_section_weight(jd):
@@ -62,43 +61,72 @@ def score_with_semantic(resume, jd):
 
     requirements = jd["requirements"]["requirement_sentences"]
     req_texts = [r["text"] for r in requirements]
-
-    # encode all requirements once
-    req_embeddings = model.encode(req_texts, convert_to_tensor=True)
-
     section_weights = get_section_weight(jd)
 
-    # go through each section separately so we can attach section info and weights
     scored_sections = {
         "experience": [],
         "projects": [],
         "education": []
     }
 
-    for section_name in ["experience", "projects"]:
-        items = resume["sections"].get(section_name, [])
+    # ── Flatten ──────────────────────────────────────────────────────────────
+    # Collect every bullet into one list, remembering where each came from, so
+    # the whole resume can be encoded in a single batched forward pass instead
+    # of one pass per bullet.
+    flat_bullets: list[str] = []
+    origins: list[tuple[str, int, int]] = []  # (section_name, entry_idx, bullet_idx)
+
+    for section_name in ("experience", "projects"):
+        for entry_idx, item in enumerate(resume["sections"].get(section_name, [])):
+            for bullet_idx, bullet_text in enumerate(item.get("bullets", [])):
+                flat_bullets.append(bullet_text)
+                origins.append((section_name, entry_idx, bullet_idx))
+
+    # ── Encode ───────────────────────────────────────────────────────────────
+    # sims[i][j] = similarity of flat_bullets[i] to req_texts[j].
+    # Stays None when either side is empty — a JD with no parsed requirement
+    # sentences used to crash here on max() of an empty sequence.
+    sims = None
+    if flat_bullets and req_texts:
+        sims = cos_sim(encode(flat_bullets), encode(req_texts))
+
+    # ── Scatter ──────────────────────────────────────────────────────────────
+    # Turn the similarity matrix back into one scored-bullet dict per origin.
+    bullet_results: dict[tuple[str, int, int], dict] = {}
+    for i, origin in enumerate(origins):
+        if sims is None:
+            # No requirement sentences to match against: score everything 0.0
+            # rather than dropping the bullet, so the rebuild step below still
+            # finds an entry for every bullet that exists.
+            best_score, best_req_text = 0.0, None
+        else:
+            similarities = sims[i].tolist()
+            best_score = max(similarities)
+            # max() + .index() resolves ties to the first requirement, matching
+            # the pre-batching behaviour so scores don't shift.
+            best_req_text = (
+                req_texts[similarities.index(best_score)]
+                if best_score > MATCH_FLOOR
+                else None
+            )
+
+        bullet_results[origin] = {
+            "text": flat_bullets[i],
+            "semantic_score": round(best_score, 4),
+            "best_match_requirement": best_req_text,
+        }
+
+    # ── Rebuild ──────────────────────────────────────────────────────────────
+    for section_name in ("experience", "projects"):
         weight = section_weights.get(section_name, 1.0)
 
-        for item in items:
-            scored_bullets = []
-            for bullet_text in item.get("bullets", []):
-                bullet_embedding = model.encode(bullet_text, convert_to_tensor=True)
+        for entry_idx, item in enumerate(resume["sections"].get(section_name, [])):
+            scored_bullets = [
+                bullet_results[(section_name, entry_idx, bullet_idx)]
+                for bullet_idx in range(len(item.get("bullets", [])))
+            ]
 
-                # cosine similarity against every requirement — gives us a score per requirement
-                similarities = util.cos_sim(bullet_embedding, req_embeddings)[0]
-                similarities = similarities.tolist()
-
-                best_score = max(similarities)
-                best_req_idx = similarities.index(best_score)
-                best_req_text = req_texts[best_req_idx] if best_score > 0.1 else None
-
-                scored_bullets.append({
-                    "text": bullet_text,
-                    "semantic_score": round(best_score, 4),
-                    "best_match_requirement": best_req_text
-                })
-
-            # average relevance for this job/project entry (used by Person 3 to decide what to include)
+            # average relevance for this job/project entry (used by the assembler to decide what to include)
             if scored_bullets:
                 avg = sum(b["semantic_score"] for b in scored_bullets) / len(scored_bullets)
             else:
@@ -136,22 +164,3 @@ def compute_overall_semantic_score(scored_sections):
     if total_bullets == 0:
         return 0.0
     return round(total_score / total_bullets, 4)
-
-
-if __name__ == "__main__":
-    with open("../data/mock_data/sample_resume.json") as f:
-        resume = json.load(f)
-    with open("../data/mock_data/sample_jd.json") as f:
-        jd = json.load(f)
-
-    print("Encoding and scoring... (this takes a few seconds the first time)")
-    scored = score_with_semantic(resume, jd)
-    overall = compute_overall_semantic_score(scored)
-
-    print(f"\nOverall semantic score: {overall}")
-    print("\nTop bullets by semantic score (experience section):")
-    for entry in scored["experience"]:
-        print(f"\n  {entry['company']} — {entry['title']}")
-        top_bullets = sorted(entry["bullets"], key=lambda x: x["semantic_score"], reverse=True)[:3]
-        for b in top_bullets:
-            print(f"    [{b['semantic_score']:.2f}] {b['text'][:70]}")

@@ -9,7 +9,6 @@ It doesn't understand meaning — if the JD says "CI/CD pipelines" and the resum
 That's exactly the point. We use this as a comparison against the semantic model.
 """
 
-import json
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
@@ -91,20 +90,3 @@ def compute_overall_keyword_score(scored_bullets):
         return 0.0
     total = sum(b["keyword_score"] for b in scored_bullets)
     return round(total / len(scored_bullets), 4)
-
-
-if __name__ == "__main__":
-    # quick test — run this directly to see what scores come out
-    with open("../data/mock_data/sample_resume.json") as f:
-        resume = json.load(f)
-    with open("../data/mock_data/sample_jd.json") as f:
-        jd = json.load(f)
-
-    scored = score_with_tfidf(resume, jd)
-    overall = compute_overall_keyword_score(scored)
-
-    print(f"Overall keyword score: {overall}")
-    print("\nTop 5 bullets by keyword score:")
-    top5 = sorted(scored, key=lambda x: x["keyword_score"], reverse=True)[:5]
-    for b in top5:
-        print(f"  [{b['keyword_score']:.2f}] {b['text'][:70]}")
