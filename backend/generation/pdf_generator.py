@@ -1,5 +1,5 @@
 """
-latex_generator.py
+pdf_generator.py
 ------------------
 Stage 3 — Resume Generation.
 

@@ -1,14 +1,16 @@
 """
-person3_generation — Resume Assembly and Generation package.
+generation — Stage 3: tailored resume assembly and PDF generation.
 
 Public interface:
-    from person3_generation.assembler       import assemble_resume
-    from person3_generation.latex_generator import generate_resume_pdf
-    from person3_generation.multi_jd_compare import run_multi_jd_comparison
+    from generation import assemble_resume, inject_missing_skills, generate_resume_pdf
+
+Note: run_multi_jd_comparison is deliberately NOT re-exported here. It pulls
+pandas/matplotlib/seaborn at import time, and it is only used by the CLI's
+--multi-jd mode. Import it directly from generation.multi_jd_compare so the
+API process never pays for the plotting stack.
 """
 
-from .assembler import assemble_resume
-from .latex_generator import generate_resume_pdf
-from .multi_jd_compare import run_multi_jd_comparison
+from .assembler import assemble_resume, inject_missing_skills
+from .pdf_generator import generate_resume_pdf
 
-__all__ = ["assemble_resume", "generate_resume_pdf", "run_multi_jd_comparison"]
+__all__ = ["assemble_resume", "inject_missing_skills", "generate_resume_pdf"]

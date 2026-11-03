@@ -8,15 +8,15 @@ We check each required skill against every bullet in the resume semantically.
 - Score between 0.4 and 0.6: partial match — the person probably has it but worded it differently
 - Score below 0.4: missing — the resume doesn't seem to mention this at all
 
-These thresholds come from the project plan. Person 3 uses the gap report to
+These thresholds come from the project plan. Stage 3 uses the gap report to
 generate the actionable feedback section of the output.
 """
 
-import json
-from sentence_transformers import SentenceTransformer, util
+from .embeddings import cos_sim, encode
 
-
-model = SentenceTransformer("all-MiniLM-L6-v2")
+# Similarity thresholds for classifying a JD skill against the resume.
+COVERED_THRESHOLD: float = 0.6  # at or above -> the resume clearly covers it
+PARTIAL_THRESHOLD: float = 0.4  # at or above -> probably there, worded differently
 
 
 def get_all_bullet_texts(resume):
@@ -52,19 +52,20 @@ def analyze_skill_gaps(resume, jd):
     if not all_bullet_texts:
         return {"covered": [], "missing": required_skills, "partial_match": []}
 
-    # encode all bullets once
-    bullet_embeddings = model.encode(all_bullet_texts, convert_to_tensor=True)
+    skills = required_skills + preferred_skills
+    if not skills:
+        return {"covered": [], "missing": [], "partial_match": []}
+
+    # One batched pass instead of one forward pass per skill:
+    # sims[i][j] = similarity of skills[i] to all_bullet_texts[j].
+    sims = cos_sim(encode(skills), encode(all_bullet_texts))
 
     covered = []
     missing = []
     partial_match = []
 
-    # check required skills first (these are the ones that matter most)
-    for skill in required_skills + preferred_skills:
-        skill_embedding = model.encode(skill, convert_to_tensor=True)
-
-        # compare this skill against every bullet
-        similarities = util.cos_sim(skill_embedding, bullet_embeddings)[0].tolist()
+    for i, skill in enumerate(skills):
+        similarities = sims[i].tolist()
 
         best_score = max(similarities)
         best_bullet_idx = similarities.index(best_score)
@@ -99,20 +100,3 @@ def analyze_skill_gaps(resume, jd):
         "missing": missing,
         "partial_match": partial_match
     }
-
-
-if __name__ == "__main__":
-    with open("../data/mock_data/sample_resume.json") as f:
-        resume = json.load(f)
-    with open("../data/mock_data/sample_jd.json") as f:
-        jd = json.load(f)
-
-    print("Running gap analysis...")
-    gaps = analyze_skill_gaps(resume, jd)
-
-    print(f"\nCovered skills: {gaps['covered']}")
-    print(f"Missing skills: {gaps['missing']}")
-    print(f"\nPartial matches (consider rewording):")
-    for p in gaps["partial_match"]:
-        print(f"  JD wants: '{p['jd_skill']}' (score: {p['similarity']})")
-        print(f"  Closest bullet: '{p['closest_bullet'][:80]}'")
