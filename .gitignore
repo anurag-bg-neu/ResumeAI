@@ -20,6 +20,7 @@ backend/data/sample_resumes/*.pdf
 frontend/node_modules/
 frontend/.next/
 frontend/out/
+frontend/*.tsbuildinfo
 
 # Env
 .env
