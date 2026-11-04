@@ -4,7 +4,7 @@ jd_parser.py — Structured Job Description parser for the ResumeAI pipeline.
 Public API:
     parse_jd(text: str) -> dict
 
-The returned dict strictly matches the Person-1 → Person-2 JSON contract:
+The returned dict strictly matches the Stage 1 → Stage 2 JSON contract:
 
     {
       "title": str,
@@ -284,7 +284,7 @@ def _clean_lines_to_sentences(source_lines: list[str]) -> list[str]:
 
 def parse_jd(text: str) -> dict:
     """
-    Parse a raw job description string into the Person-1 → Person-2 JSON contract.
+    Parse a raw job description string into the Stage 1 → Stage 2 JSON contract.
 
     Args:
         text: Raw JD text (supports multi-line and LinkedIn single-line paste).

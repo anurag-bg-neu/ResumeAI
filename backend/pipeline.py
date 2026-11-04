@@ -1,89 +1,134 @@
 """
 pipeline.py
 -----------
-Wires all 3 stages together into one end-to-end run.
+The single orchestrator for the three stages. Both the CLI and the web API
+call through here, so the wiring lives in exactly one place.
 
-Usage:
-    python pipeline.py --resume data/sample_resumes/milan.pdf --jd data/sample_jds/jd1.txt
-    python pipeline.py --resume data/sample_resumes/milan.pdf --jd data/sample_jds/jd1.txt --output results/scored.json
+This is library code: it logs, it never prints, and it only touches the
+filesystem when a caller explicitly asks for a PDF.
 
-What it does:
-    Stage 1 (Person 1): parse the PDF resume + JD text into clean JSON
-    Stage 2 (Person 2): score every bullet semantically and with TF-IDF, run gap analysis
-    Stage 3 output:     save the scored JSON so Person 3 can pick it up for resume assembly
+    Stage 1  parse_resume() + parse_jd()   -> raw structured dicts
+    Stage 2  score_resume()                -> TF-IDF + semantic + gap analysis
+    Stage 3  assemble_resume()             -> tailored resume dict
+             generate_resume_pdf()         -> PDF on disk (optional)
+
+Public API:
+    from pipeline import analyze, run_pipeline
 """
 
-import argparse
-import json
-import os
-import sys
+from __future__ import annotations
 
-# make sure the sub-packages are importable when running from the repo root
-sys.path.insert(0, os.path.dirname(__file__))
+import logging
+from dataclasses import dataclass, field
+from pathlib import Path
 
-from person1_parsing.resume_parser import parse_resume
-from person1_parsing.jd_parser import parse_jd
-from person2_scoring.scorer import score_resume
+from generation.assembler import assemble_resume, inject_missing_skills
+from generation.pdf_generator import generate_resume_pdf
+from parsing.jd_parser import parse_jd
+from parsing.resume_parser import parse_resume
+from scoring.scorer import score_resume
+
+log = logging.getLogger(__name__)
 
 
-def run_pipeline(resume_pdf_path, jd_source, output_path=None):
+@dataclass
+class AnalysisResult:
+    """Stages 1-2. Everything parsed and scored; nothing assembled or written."""
+
+    resume: dict
+    jd: dict
+    scored: dict
+
+
+@dataclass
+class PipelineResult(AnalysisResult):
+    """Stages 1-3. Adds the assembled resume and, when requested, the PDF path."""
+
+    assembled: dict
+    injected_skills: list[str] = field(default_factory=list)
+    pdf_path: str | None = None
+
+
+def analyze(resume_pdf: str | Path, jd_text: str) -> AnalysisResult:
     """
-    Full pipeline: PDF + JD text -> scored JSON ready for Person 3.
+    Run Stages 1 and 2.
 
-    resume_pdf_path: path to the master resume PDF
-    jd_source:       either a path to a .txt file or raw JD text as a string
-    output_path:     where to save the scored JSON (optional)
+    Args:
+        resume_pdf: Path to the resume PDF.
+        jd_text:    The job description as raw text. Deliberately NOT a path —
+                    the API already holds text and the CLI reads the file, so
+                    keeping path handling out of here is what lets both callers
+                    share this function.
     """
+    log.info("Stage 1 — parsing resume: %s", resume_pdf)
+    resume = parse_resume(str(resume_pdf))
+    log.info(
+        "Parsed %d experiences, %d projects, %d skills",
+        len(resume["sections"]["experience"]),
+        len(resume["sections"]["projects"]),
+        len(resume["all_skills_detected"]),
+    )
 
-    # ── Stage 1: parse ──────────────────────────────────────────────────────
-    print(f"\n[Stage 1] Parsing resume: {resume_pdf_path}")
-    resume = parse_resume(resume_pdf_path)
-    print(f"  Parsed {len(resume['sections']['experience'])} experience entries, "
-          f"{len(resume['sections']['projects'])} projects, "
-          f"{len(resume['all_skills_detected'])} skills detected")
-
-    # figure out if jd_source is a file path or raw text
-    if os.path.isfile(jd_source):
-        with open(jd_source) as f:
-            jd_text = f.read()
-        print(f"\n[Stage 1] Parsing JD from file: {jd_source}")
-    else:
-        jd_text = jd_source
-        print(f"\n[Stage 1] Parsing JD from raw text ({len(jd_text)} chars)")
-
+    log.info("Stage 1 — parsing JD (%d chars)", len(jd_text))
     jd = parse_jd(jd_text)
-    print(f"  Role: {jd['title']} @ {jd['company']}")
-    print(f"  {len(jd['requirements']['required_skills'])} required skills, "
-          f"{len(jd['requirements']['preferred_skills'])} preferred skills")
+    log.info("JD role: %s @ %s", jd.get("title", "?"), jd.get("company", "?"))
 
-    # ── Stage 2: score ──────────────────────────────────────────────────────
-    print(f"\n[Stage 2] Scoring resume against JD...")
+    log.info("Stage 2 — scoring resume against JD")
     scored = score_resume(resume, jd)
 
-    print(f"\n  Overall semantic score: {scored['overall_semantic_score']}")
-    print(f"  Overall keyword score:  {scored['overall_keyword_score']}")
-    print(f"  Covered skills:  {scored['skills_analysis']['covered']}")
-    print(f"  Missing skills:  {scored['skills_analysis']['missing']}")
-    if scored['skills_analysis']['partial_match']:
-        print(f"  Partial matches: {[p['jd_skill'] for p in scored['skills_analysis']['partial_match']]}")
+    # The assembler needs contact details, which only the parsed resume has.
+    scored["contact"] = resume.get("contact", {})
 
-    # ── Save output ─────────────────────────────────────────────────────────
-    if output_path:
-        os.makedirs(os.path.dirname(output_path), exist_ok=True) if os.path.dirname(output_path) else None
-        with open(output_path, "w") as f:
-            json.dump(scored, f, indent=2)
-        print(f"\n[Done] Scored output saved to: {output_path}")
-    else:
-        print("\n[Done] (pass --output <path> to save the scored JSON)")
-
-    return scored
+    log.info(
+        "Scored: semantic=%.4f keyword=%.4f",
+        scored["overall_semantic_score"],
+        scored["overall_keyword_score"],
+    )
+    return AnalysisResult(resume=resume, jd=jd, scored=scored)
 
 
-if __name__ == "__main__":
-    ap = argparse.ArgumentParser(description="ResumeAI — end-to-end pipeline")
-    ap.add_argument("--resume", required=True, help="Path to master resume PDF")
-    ap.add_argument("--jd", required=True, help="Path to JD text file (or raw JD text)")
-    ap.add_argument("--output", default=None, help="Where to save scored JSON output")
-    args = ap.parse_args()
+def run_pipeline(
+    resume_pdf: str | Path,
+    jd_text: str,
+    *,
+    output_dir: str | Path | None = None,
+    filename_stem: str = "tailored_resume",
+    add_missing_skills: bool = True,
+) -> PipelineResult:
+    """
+    Run all three stages.
 
-    run_pipeline(args.resume, args.jd, args.output)
+    Args:
+        output_dir:         Where to write the PDF. None skips PDF generation
+                            entirely, which is what makes this cheap to test.
+        filename_stem:      PDF filename without the extension.
+        add_missing_skills: Append the JD's missing skills to the skills section
+                            before rendering, for ATS keyword coverage.
+    """
+    analysis = analyze(resume_pdf, jd_text)
+
+    log.info("Stage 3 — assembling tailored resume")
+    assembled = assemble_resume(analysis.scored, analysis.jd, resume=analysis.resume)
+
+    injected: list[str] = []
+    if add_missing_skills:
+        injected = inject_missing_skills(assembled, assembled["gap_report"])
+
+    pdf_path: str | None = None
+    if output_dir is not None:
+        log.info("Stage 3 — generating PDF in %s", output_dir)
+        pdf_path = generate_resume_pdf(
+            assembled,
+            output_dir=str(output_dir),
+            filename_stem=filename_stem,
+        )
+        log.info("PDF written: %s", pdf_path)
+
+    return PipelineResult(
+        resume=analysis.resume,
+        jd=analysis.jd,
+        scored=analysis.scored,
+        assembled=assembled,
+        injected_skills=injected,
+        pdf_path=pdf_path,
+    )

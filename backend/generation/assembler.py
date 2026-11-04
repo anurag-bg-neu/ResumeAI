@@ -3,7 +3,7 @@ assembler.py
 ------------
 Stage 3 — Resume Assembly Logic.
 
-Takes the scored JSON from Person 2 and the full resume dict from Person 1,
+Takes the scored dict from Stage 2 and the full resume dict from Stage 1,
 then applies structural decision rules:
 
   1. Experience Selection  — cut entries with avg_relevance < EXPERIENCE_CUT_THRESHOLD
@@ -17,7 +17,7 @@ then applies structural decision rules:
   7. Gap Report            — missing + partial_match skills with actionable notes
 
 Public API:
-    from person3_generation.assembler import assemble_resume
+    from generation.assembler import assemble_resume, inject_missing_skills
 """
 
 from __future__ import annotations
@@ -295,12 +295,12 @@ def assemble_resume(
     resume: dict | None = None,
 ) -> dict:
     """
-    Convert Person 2's scored JSON into an assembled resume dict for PDF generation.
+    Convert Stage 2's scored dict into an assembled resume dict for PDF generation.
 
     Args:
-        scored_output: Output of person2_scoring.scorer.score_resume().
-        jd:            Parsed JD dict from person1_parsing.jd_parser.parse_jd().
-        resume:        Full resume dict from person1_parsing.resume_parser.parse_resume().
+        scored_output: Output of scoring.scorer.score_resume().
+        jd:            Parsed JD dict from parsing.jd_parser.parse_jd().
+        resume:        Full resume dict from parsing.resume_parser.parse_resume().
                        When provided, original bullets and extra sections are preserved.
 
     Returns dict with keys:
@@ -383,3 +383,46 @@ def assemble_resume(
     )
 
     return assembled
+
+
+def inject_missing_skills(assembled: dict, gap_report: dict) -> list[str]:
+    """
+    Append the JD's missing skills to the assembled resume's skills section so
+    they appear on the generated PDF, improving ATS keyword coverage.
+
+    Mutates `assembled` in place. Skills already present are skipped
+    (case-insensitive), which also makes this idempotent.
+
+    Returns the list of skills actually added, so callers can report it.
+    """
+    missing = gap_report.get("missing_skills", [])
+    if not missing:
+        return []
+
+    # skills is normally {"flat": [...], "categorized": [...]}, but tolerate a
+    # bare list from older callers.
+    skills_data = assembled.get("skills", {})
+    if isinstance(skills_data, dict):
+        flat = skills_data.get("flat", [])
+        cats = skills_data.get("categorized", [])
+    else:
+        flat = skills_data
+        cats = [{"category": "Skills", "skills": list(skills_data)}]
+
+    existing_lower = {s.lower() for s in flat}
+    newly_added = [s for s in missing if s.lower() not in existing_lower]
+
+    if not newly_added:
+        log.info("No new skills to inject — all missing skills already present")
+        return []
+
+    # Append to the last category too, so they show up in the categorized layout
+    # the PDF renders, not just the flat list.
+    if cats:
+        cats[-1]["skills"] = cats[-1]["skills"] + newly_added
+    else:
+        cats = [{"category": "Skills", "skills": list(newly_added)}]
+
+    assembled["skills"] = {"flat": flat + newly_added, "categorized": cats}
+    log.info("Injected %d missing skill(s): %s", len(newly_added), ", ".join(newly_added))
+    return newly_added
