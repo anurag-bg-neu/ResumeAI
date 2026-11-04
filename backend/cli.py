@@ -1,36 +1,39 @@
 """
-generate_resume.py
-------------------
-Modular CLI helper for the full ResumeAI pipeline (Stage 1 → 2 → 3).
+cli.py
+------
+Command-line entry point for the full ResumeAI pipeline (Stage 1 → 2 → 3).
 
 Selects which resume PDF and which JD to use via command-line arguments,
 runs the complete pipeline, identifies missing/partial skills, adds them
 to the skills section if requested, and generates a tailored PDF resume.
 
+The stage wiring itself lives in pipeline.py — this module is presentation
+and argument handling only.
+
 Usage examples
 --------------
 # Basic: parse resume + score against a JD + generate PDF
-python generate_resume.py \\
-    --resume data/sample_resumes/milan.pdf \\
+python cli.py \\
+    --resume data/sample_resumes/resume.pdf \\
     --jd data/sample_jds/jd1.txt
 
 # Add missing JD skills to the skills section before PDF generation
-python generate_resume.py \\
-    --resume data/sample_resumes/milan.pdf \\
+python cli.py \\
+    --resume data/sample_resumes/resume.pdf \\
     --jd data/sample_jds/jd2.txt \\
     --add-missing-skills \\
     --output results/
 
 # Use pre-scored JSON (skip Stage 1 + 2 if already computed)
-python generate_resume.py \\
-    --scored data/mock_data/sample_scored.json \\
+python cli.py \\
+    --scored results/scored.json \\
     --jd-json data/mock_data/sample_jd.json \\
     --add-missing-skills \\
     --output results/
 
 # Multi-JD comparison (score one resume against all JDs in a folder)
-python generate_resume.py \\
-    --resume data/sample_resumes/milan.pdf \\
+python cli.py \\
+    --resume data/sample_resumes/resume.pdf \\
     --jd-dir data/sample_jds/ \\
     --multi-jd \\
     --output results/
@@ -48,7 +51,7 @@ Arguments
 --verbose           Enable DEBUG logging
 
 Sample command to run this file to generate a fully updated resume:
-python generate_resume.py --resume data/sample_resumes/milan.pdf --jd data/sample_jds/jd4.txt --add-missing-skills
+python cli.py --resume data/sample_resumes/resume.pdf --jd data/sample_jds/jd4.txt --add-missing-skills
 """
 
 from __future__ import annotations
@@ -56,29 +59,19 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import sys
 from pathlib import Path
 
-# Force stdout to flush immediately — prevents interleaved print/logging on Windows
-reconfigure = getattr(sys.stdout, "reconfigure", None)
-if callable(reconfigure):
-    reconfigure(line_buffering=True)
+from generation.assembler import assemble_resume, inject_missing_skills
+from generation.pdf_generator import generate_resume_pdf
+from parsing.jd_parser import parse_jd
+from parsing.resume_parser import parse_resume
+from pipeline import run_pipeline
+from scoring.scorer import score_resume
 
-# ── ensure repo root is on sys.path regardless of invocation directory ────────
-_REPO_ROOT = Path(__file__).resolve().parent
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
-
-from person1_parsing.resume_parser import parse_resume
-from person1_parsing.jd_parser import parse_jd
-from person2_scoring.scorer import score_resume
-from person3_generation.assembler import assemble_resume
-from person3_generation.latex_generator import generate_resume_pdf
-from person3_generation.multi_jd_compare import (
-    run_multi_jd_comparison,
-    print_multi_jd_summary,
-)
+# generation.multi_jd_compare is imported lazily inside run_multi_jd_pipeline:
+# it pulls pandas/matplotlib/seaborn, which --multi-jd runs should pay for and
+# ordinary single-JD runs should not.
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DISPLAY HELPERS
@@ -155,84 +148,23 @@ def _print_assembly_summary(assembled: dict) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _stage1_parse(resume_path: str, jd_source: str) -> tuple[dict, dict]:
-    """Run Stage 1: parse PDF resume and JD text into dicts."""
-    print(f"\n[Stage 1] Parsing resume: {resume_path}")
-    resume = parse_resume(resume_path)
-    print(
-        f"  → {len(resume['sections']['experience'])} experiences, "
-        f"{len(resume['sections']['projects'])} projects, "
-        f"{len(resume['all_skills_detected'])} skills"
-    )
-
+def _read_jd_text(jd_source: str) -> str:
+    """Accept either a path to a .txt JD or the raw JD text itself."""
     if Path(jd_source).is_file():
-        with open(jd_source, encoding="utf-8", errors="ignore") as fh:
-            jd_text = fh.read()
-        print(f"\n[Stage 1] Parsing JD: {jd_source}")
-    else:
-        jd_text = jd_source
-        print(f"\n[Stage 1] Parsing JD from raw text ({len(jd_text)} chars)")
-
-    jd = parse_jd(jd_text)
-    print(
-        f"  → Role: {jd.get('title', '(unknown)')} @ {jd.get('company', '(unknown)')}"
-    )
-    print(
-        f"  → {len(jd['requirements']['required_skills'])} required skills, "
-        f"{len(jd['requirements']['preferred_skills'])} preferred skills"
-    )
-    return resume, jd
+        print(f"\n[Stage 1] Reading JD: {jd_source}")
+        return Path(jd_source).read_text(encoding="utf-8", errors="ignore")
+    print(f"\n[Stage 1] Using raw JD text ({len(jd_source)} chars)")
+    return jd_source
 
 
-def _stage2_score(resume: dict, jd: dict) -> dict:
-    """Run Stage 2: score the resume against the JD."""
-    print("\n[Stage 2] Scoring resume against JD...")
-    scored = score_resume(resume, jd)
-    print(f"  → Semantic score: {scored['overall_semantic_score']:.4f}")
-    print(f"  → Keyword score : {scored['overall_keyword_score']:.4f}")
-    print(f"  → Covered skills: {scored['skills_analysis']['covered']}")
-    print(f"  → Missing skills: {scored['skills_analysis']['missing']}")
-    return scored
-
-
-def _inject_missing_skills(assembled: dict, gap_report: dict) -> dict:
-    """
-    Inject missing JD skills into the assembled resume's skills list
-    (appended after existing skills so they appear on the PDF).
-
-    This directly improves ATS keyword coverage for the targeted JD.
-    Only adds skills that aren't already present (case-insensitive check).
-    """
-    missing = gap_report.get("missing_skills", [])
-    if not missing:
-        return assembled
-
-    # skills is a dict {"flat": [...], "categorized": [...]}
-    skills_data = assembled.get("skills", {})
-    if isinstance(skills_data, dict):
-        flat = skills_data.get("flat", [])
-        cats = skills_data.get("categorized", [])
-    else:
-        flat = skills_data
-        cats = [{"category": "Skills", "skills": skills_data}]
-
-    existing_lower = {s.lower() for s in flat}
-    newly_added = [s for s in missing if s.lower() not in existing_lower]
-
-    if newly_added:
-        flat = flat + newly_added
-        # Also append to last category so they appear in categorized skills
-        if cats:
-            cats[-1]["skills"] = cats[-1]["skills"] + newly_added
-        assembled["skills"] = {"flat": flat, "categorized": cats}
+def _print_injected(added: list[str]) -> None:
+    if added:
         print(
-            f"\n  [+] Injected {len(newly_added)} missing skill(s) into skills section: "
-            f"{', '.join(newly_added)}"
+            f"\n  [+] Injected {len(added)} missing skill(s) into skills section: "
+            f"{', '.join(added)}"
         )
     else:
         print("\n  [i] No new skills to inject (all missing skills already present).")
-
-    return assembled
 
 
 def _stage3_generate(assembled: dict, output_dir: str, stem: str) -> str:
@@ -267,9 +199,8 @@ def run_single_jd_pipeline(args: argparse.Namespace) -> None:
         Path(args.output)
     )  # normalize: removes trailing slash / double slash
 
-    # ── Load or compute scored output ────────────────────────────────────────
     if args.scored:
-        # Pre-scored JSON provided — skip Stages 1 & 2
+        # ── Pre-scored JSON provided — skip Stages 1 & 2 ─────────────────────
         print(f"\n[Stage 1+2] Loading pre-scored JSON: {args.scored}")
         with open(args.scored, encoding="utf-8") as fh:
             scored = json.load(fh)
@@ -279,7 +210,7 @@ def run_single_jd_pipeline(args: argparse.Namespace) -> None:
             with open(args.jd_json, encoding="utf-8") as fh:
                 jd = json.load(fh)
         else:
-            # Build a minimal jd dict so assembly works without a JD file
+            # Minimal jd dict so assembly works without a JD file
             jd = {
                 "title": "",
                 "company": "",
@@ -292,8 +223,16 @@ def run_single_jd_pipeline(args: argparse.Namespace) -> None:
                 "raw_text": "",
             }
 
+        # No parsed resume here, so the assembler can't restore original bullets.
+        print("\n[Stage 3] Assembling tailored resume...")
+        assembled = assemble_resume(scored, jd, resume=None)
+        _print_assembly_summary(assembled)
+        _print_gap_report(assembled["gap_report"])
+        if args.add_missing_skills:
+            _print_injected(inject_missing_skills(assembled, assembled["gap_report"]))
+
     else:
-        # Full pipeline from scratch
+        # ── Full pipeline from scratch ───────────────────────────────────────
         if not args.resume:
             print("[ERROR] --resume is required when --scored is not provided.")
             sys.exit(1)
@@ -301,24 +240,22 @@ def run_single_jd_pipeline(args: argparse.Namespace) -> None:
             print("[ERROR] Either --jd or --jd-json is required.")
             sys.exit(1)
 
-        jd_source = args.jd if args.jd else args.jd_json
-        resume, jd = _stage1_parse(args.resume, jd_source)
-        scored = _stage2_score(resume, jd)
+        jd_text = _read_jd_text(args.jd if args.jd else args.jd_json)
 
-        # Stash contact info into scored so assembler can pass it through
-        scored["contact"] = resume.get("contact", {})
+        # output_dir=None: run stages 1-3 but defer PDF writing, because the
+        # output filename depends on the JD company name we only learn here.
+        result = run_pipeline(
+            args.resume,
+            jd_text,
+            output_dir=None,
+            add_missing_skills=args.add_missing_skills,
+        )
+        jd, assembled = result.jd, result.assembled
 
-    # ── Stage 3: Assemble ────────────────────────────────────────────────────
-    print("\n[Stage 3] Assembling tailored resume...")
-    # Pass full resume dict so assembler can restore all original bullets and extra sections
-    full_resume = locals().get("resume", None)  # available when full pipeline ran
-    assembled = assemble_resume(scored, jd, resume=full_resume)
-    _print_assembly_summary(assembled)
-    _print_gap_report(assembled["gap_report"])
-
-    # ── Optionally inject missing skills ─────────────────────────────────────
-    if args.add_missing_skills:
-        assembled = _inject_missing_skills(assembled, assembled["gap_report"])
+        _print_assembly_summary(assembled)
+        _print_gap_report(assembled["gap_report"])
+        if args.add_missing_skills:
+            _print_injected(result.injected_skills)
 
     # ── Generate PDF ─────────────────────────────────────────────────────────
     # Use JD company name if available, otherwise fall back to JD filename stem
@@ -351,6 +288,12 @@ def run_multi_jd_pipeline(args: argparse.Namespace) -> None:
     Multi-JD comparison pipeline:
     Parse one resume → score against each JD in --jd-dir → heatmap + summary.
     """
+    # Deferred: drags in pandas/matplotlib/seaborn, only needed for this mode.
+    from generation.multi_jd_compare import (
+        print_multi_jd_summary,
+        run_multi_jd_comparison,
+    )
+
     output_dir = str(Path(args.output))  # normalize path
     jd_dir = Path(args.jd_dir)
 
@@ -421,19 +364,16 @@ def run_multi_jd_pipeline(args: argparse.Namespace) -> None:
         f"(semantic={scored_outputs[best_jd_label]['overall_semantic_score']:.4f})"
     )
 
-    if args.add_missing_skills or True:  # always generate for best JD in multi mode
-        best_scored = scored_outputs[best_jd_label]
-        # Re-parse the best JD to get full jd dict for assembler
-        best_jd_path = jd_dir / f"{best_jd_label}.txt"
-        with open(best_jd_path, encoding="utf-8", errors="ignore") as fh:
-            best_jd = parse_jd(fh.read())
-        assembled = assemble_resume(best_scored, best_jd, resume=resume)
-        if args.add_missing_skills:
-            assembled = _inject_missing_skills(assembled, assembled["gap_report"])
-        pdf_path = _stage3_generate(
-            assembled, output_dir, f"best_match_{best_jd_label}"
-        )
-        print(f"  Best-match PDF  : {pdf_path}")
+    # Always generate a PDF for the best-matching JD in multi mode.
+    best_scored = scored_outputs[best_jd_label]
+    # Re-parse the best JD to get the full jd dict the assembler needs
+    best_jd_path = jd_dir / f"{best_jd_label}.txt"
+    best_jd = parse_jd(best_jd_path.read_text(encoding="utf-8", errors="ignore"))
+    assembled = assemble_resume(best_scored, best_jd, resume=resume)
+    if args.add_missing_skills:
+        _print_injected(inject_missing_skills(assembled, assembled["gap_report"]))
+    pdf_path = _stage3_generate(assembled, output_dir, f"best_match_{best_jd_label}")
+    print(f"  Best-match PDF  : {pdf_path}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -443,7 +383,7 @@ def run_multi_jd_pipeline(args: argparse.Namespace) -> None:
 
 def _build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
-        prog="generate_resume",
+        prog="resumeai",
         description="ResumeAI — full pipeline helper (Stage 1 → 2 → 3)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
@@ -498,6 +438,14 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    # Line-buffer stdout so print() and logging don't interleave, and force
+    # UTF-8 so the box-drawing and check/cross glyphs below survive a non-UTF-8
+    # console or a redirected pipe (cp1252 on Windows raises on them).
+    # Done here rather than at import so importing cli.py has no side effects.
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if callable(reconfigure):
+        reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
+
     ap = _build_parser()
     args = ap.parse_args()
 
