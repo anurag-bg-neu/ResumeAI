@@ -30,19 +30,24 @@ import logging
 import re
 
 from .utils import (
-    DATE_RANGE,
     BULLET_INLINE_RE,
     COMPANY_HINTS_RE,
+    DATE_RANGE,
     ROLE_SEP_RE,
+    ROLE_WORD_RE,
     STOP_SECTIONS_RE,
+    canonical_skill,
     extract_bullets,
     extract_date_range,
+    extract_date_ranges,
     extract_location,
     extract_skills,
     extract_text_from_pdf,
+    is_location_line,
     merge_continuation_lines,
     normalize_bullet_lines,
     remove_date_range,
+    split_outside_parens,
     split_role_and_company,
 )
 
@@ -52,53 +57,96 @@ log = logging.getLogger(__name__)
 # SECTION CLASSIFICATION
 # ─────────────────────────────────────────────────────────────────────────────
 
-_SECTION_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+# A header is the whole line (optionally with a trailing colon), so prose or
+# inline labels like "Profiles: LeetCode, ..." never open a new section.
+_SECTION_HEADERS: list[tuple[str, str]] = [
     (
         "summary",
-        re.compile(
-            r"^(professional\s+)?summary|^(career\s+)?objective|^profile|^about(\s+me)?",
-            re.IGNORECASE | re.MULTILINE,
-        ),
+        r"(?:professional\s+|career\s+)?(?:summary|objective|profile)|about(?:\s+me)?",
     ),
     (
         "experience",
-        re.compile(
-            r"^(work\s+)?experience|^employment|^work\s+history|^professional\s+experience",
-            re.IGNORECASE | re.MULTILINE,
-        ),
+        r"(?:work\s+|professional\s+|relevant\s+)?experience"
+        r"|employment(?:\s+history)?|work\s+history",
     ),
     (
         "education",
-        re.compile(
-            r"^education(al)?(\s+background)?|^academic|^qualifications",
-            re.IGNORECASE | re.MULTILINE,
-        ),
+        r"education(?:al\s+background)?|academic\s+background|academics|qualifications",
     ),
     (
         "skills",
-        re.compile(
-            r"^(technical\s+)?skills|^core\s+competencies|^technologies"
-            r"|^proficiencies|^technical\s+toolkit|^tech\s+stack"
-            r"|^areas\s+of\s+expertise|^competencies",
-            re.IGNORECASE | re.MULTILINE,
-        ),
+        r"(?:technical\s+|core\s+|key\s+)?skills(?:\s+(?:summary|overview))?"
+        r"(?:\s*(?:&|and)\s*\w+(?:\s+\w+)?)?"
+        r"|(?:core\s+)?competencies|technologies|technical\s+toolkit"
+        r"|tech(?:nical)?\s+stack|proficiencies|areas\s+of\s+expertise",
     ),
     (
         "projects",
-        re.compile(
-            r"^projects?|^project\s+work|^personal\s+projects?|^key\s+projects?|^portfolio",
-            re.IGNORECASE | re.MULTILINE,
-        ),
+        r"(?:academic\s+|personal\s+|key\s+|selected\s+|technical\s+)?projects?"
+        r"|project\s+work|portfolio",
+    ),
+    (
+        "open_source",
+        r"open[\s-]source(?:\s+(?:contributions?|projects?|work))?",
+    ),
+    # ── Extra sections: kept as raw text, rendered as-is by the generator ──
+    (
+        "publications",
+        r"(?:research\s*(?:&|and)\s*)?publications?|research",
+    ),
+    (
+        "leadership",
+        r"leadership(?:\s*(?:&|and)\s*teaching)?|teaching\s+experience",
+    ),
+    (
+        "achievements",
+        r"achievements?|extracurricular(?:\s+activities)?|honou?rs?(?:\s*(?:&|and)\s*awards?)?"
+        r"|awards?(?:\s*(?:&|and)\s*honou?rs?)?",
     ),
     (
         "certifications",
-        re.compile(
-            r"^certifications?|^licenses?(\s+&\s+certifications?)?|^credentials"
-            r"|^awards?\s*(and|&)\s*cert|^awards?",
-            re.IGNORECASE | re.MULTILINE,
-        ),
+        r"(?:licenses?\s*(?:&|and)\s*)?certifications?(?:\s*(?:&|and)\s*licenses?)?"
+        r"|licenses?|credentials|awards?\s*(?:&|and)\s*certifications?",
     ),
 ]
+
+EXTRA_SECTIONS: tuple[str, ...] = ("publications", "leadership", "achievements", "certifications")
+
+_SECTION_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    (name, re.compile(rf"(?:{body})\s*:?", re.IGNORECASE))
+    for name, body in _SECTION_HEADERS
+]
+
+
+def _find_section_headers(
+    lines: list[str], patterns: list[tuple[str, re.Pattern[str]]]
+) -> list[tuple[int, str]]:
+    """Return (line_index, section_name) for the first header of each section."""
+    boundaries: list[tuple[int, str]] = []
+    seen: set[str] = set()
+    for line_num, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped or len(stripped) > 60:
+            continue
+        for section_name, pattern in patterns:
+            if section_name not in seen and pattern.fullmatch(stripped):
+                boundaries.append((line_num, section_name))
+                seen.add(section_name)
+                break
+    return boundaries
+
+
+def _slice_sections(
+    lines: list[str], boundaries: list[tuple[int, str]]
+) -> dict[str, str]:
+    """Body text between each header and the next one."""
+    sections: dict[str, str] = {}
+    for i, (line_num, section_name) in enumerate(boundaries):
+        end = boundaries[i + 1][0] if i + 1 < len(boundaries) else len(lines)
+        body = "\n".join(lines[line_num + 1 : end]).strip()
+        if body:
+            sections[section_name] = body
+    return sections
 
 
 def classify_sections(text: str) -> dict[str, str]:
@@ -111,35 +159,11 @@ def classify_sections(text: str) -> dict[str, str]:
     lines = text.split("\n")
     sections: dict[str, str] = {"full_text": text}
 
-    # Treat first ~5 non-empty lines as contact block
+    # The first few non-empty lines are the contact block.
     contact_lines = [ln.strip() for ln in lines[:12] if ln.strip()]
     sections["contact"] = "\n".join(contact_lines[:5])
 
-    boundaries: list[tuple[int, str]] = []
-    seen: set[str] = set()
-
-    for line_num, line in enumerate(lines):
-        stripped = line.strip()
-        if not stripped or len(stripped) > 60:
-            continue
-        # Section headers don't end with sentence punctuation
-        if stripped.endswith((".", "!", "?", ",")):
-            continue
-        if len(stripped) > 35 and not stripped.isupper():
-            continue
-
-        for section_name, pattern in _SECTION_PATTERNS:
-            if pattern.search(stripped) and section_name not in seen:
-                boundaries.append((line_num, section_name))
-                seen.add(section_name)
-                break
-
-    for i, (line_num, section_name) in enumerate(boundaries):
-        start = line_num + 1
-        end = boundaries[i + 1][0] if i + 1 < len(boundaries) else len(lines)
-        body = "\n".join(lines[start:end]).strip()
-        if body:
-            sections[section_name] = body
+    sections.update(_slice_sections(lines, _find_section_headers(lines, _SECTION_PATTERNS)))
 
     log.info("Sections classified: %s", list(sections.keys()))
     return sections
@@ -152,9 +176,9 @@ def classify_sections(text: str) -> dict[str, str]:
 
 def extract_contact_info(text: str) -> dict[str, str]:
     """
-    Extract name, email, and phone from the top of the résumé text.
+    Extract contact details from the top of the résumé text.
 
-    Returns {"name": str, "email": str, "phone": str}.
+    Returns {"name", "email", "phone", "linkedin", "location"} (all str).
     """
     contact: dict[str, str] = {
         "name": "",
@@ -179,8 +203,9 @@ def extract_contact_info(text: str) -> dict[str, str]:
     if linkedin_m:
         contact["linkedin"] = "www.linkedin.com/in/" + linkedin_m.group(1)
 
-    # City/State location from contact block (first 5 lines)
-    loc_m = re.search(r"\b([A-Z][a-zA-Z\s]+,\s*[A-Z]{2})\b|\b(Remote)\b", text)
+    # City/State location from contact block (first 5 lines); [ ] not \s so
+    # the match can't run back across a line break into the name.
+    loc_m = re.search(r"\b([A-Z][a-zA-Z ]+,\s*[A-Z]{2})\b|\b(Remote)\b", text)
     if loc_m:
         contact["location"] = (loc_m.group(1) or loc_m.group(2)).strip()
 
@@ -241,6 +266,54 @@ _TECH_STACK_BULLET_RE = re.compile(
 )
 
 
+def _looks_like_title(text: str) -> bool:
+    return (
+        len(text) <= 60
+        and len(text.split()) <= 7
+        and bool(ROLE_WORD_RE.search(text) or _TITLE_RE.match(text))
+        and not COMPANY_HINTS_RE.search(text)
+    )
+
+
+def _resolve_entry_header(header_lines: list[str]) -> tuple[str, str, str]:
+    """
+    Work out (company, title, location) from an entry's header lines.
+
+    Handles every common layout: one line per field in any order
+    ("Granite Bank" / dates / "Software Engineer" / "Boston, MA, USA"),
+    or a combined "Title | Company" / "Company - Title" line.
+    """
+    company = title = location = ""
+    for line in header_lines:
+        text = remove_date_range(line)
+        if not text:
+            continue
+        if is_location_line(text):
+            location = location or text
+            continue
+
+        parts = ROLE_SEP_RE.split(text, maxsplit=1)
+        if len(parts) == 2 and not (title and company) and (
+            _looks_like_title(parts[0]) or _looks_like_title(parts[1])
+        ):
+            t, c = split_role_and_company(text)
+            if _looks_like_title(c) and not _looks_like_title(t):
+                t, c = c, t
+            title, company = title or t, company or c
+        elif _looks_like_title(text) and not title:
+            title = text
+        elif not company:
+            company = text
+        elif not title:
+            title = text
+
+    if not location:
+        company, loc1 = extract_location(company)
+        title, loc2 = extract_location(title)
+        location = loc1 or loc2
+    return company, title, location
+
+
 def parse_experience(section_text: str) -> list[dict]:
     """
     Parse the experience section into structured entries.
@@ -290,9 +363,8 @@ def parse_experience(section_text: str) -> list[dict]:
         header_lines: list[str] = []
         bullet_lines: list[str] = []
         in_bullets = False
-        title_after_date = ""
 
-        for idx_ln, ln in enumerate(block):
+        for ln in block:
             if BULLET_INLINE_RE.match(ln):
                 if _TECH_STACK_BULLET_RE.match(ln):
                     continue  # skip pure tech-stack lists
@@ -300,18 +372,6 @@ def parse_experience(section_text: str) -> list[dict]:
                 bullet_lines.append(ln)
             elif in_bullets:
                 bullet_lines.append(ln)
-            elif DATE_RANGE.search(ln):
-                header_lines.append(ln)
-                if idx_ln + 1 < len(block):
-                    nxt = block[idx_ln + 1].strip()
-                    if (
-                        _TITLE_RE.match(nxt)
-                        and not BULLET_INLINE_RE.match(nxt)
-                        and len(nxt) < 60
-                    ):
-                        title_after_date = nxt
-            elif title_after_date and ln.strip() == title_after_date:
-                continue  # already captured
             else:
                 header_lines.append(ln)
 
@@ -327,71 +387,7 @@ def parse_experience(section_text: str) -> list[dict]:
                     real_headers.append(ln)
             header_lines = real_headers
 
-        header_text = " | ".join(header_lines)
-        dates = extract_date_range(header_text)
-
-        company = title = location = ""
-
-        # Filter out standalone location lines
-        clean_headers: list[str] = []
-        for h in header_lines:
-            h_clean = remove_date_range(h)
-            if not h_clean:
-                continue
-            _, loc = extract_location(h_clean)
-            remaining = (
-                re.sub(
-                    r",?\s*([A-Z][a-zA-Z\s]+,\s*[A-Z]{2})\s*$|,?\s*(Remote)\s*$",
-                    "",
-                    h_clean,
-                    flags=re.IGNORECASE,
-                )
-                .strip()
-                .rstrip("|,–-—")
-                .strip()
-            )
-            if loc and not remaining:
-                location = loc
-            else:
-                clean_headers.append(h_clean)
-
-        if len(clean_headers) >= 2:
-            line1, line2 = clean_headers[0], clean_headers[1]
-            if ROLE_SEP_RE.search(line1):
-                title, company = split_role_and_company(line1)
-            elif ROLE_SEP_RE.search(line2):
-                title, company = split_role_and_company(line2)
-                if not company:
-                    company = line1
-            else:
-                if COMPANY_HINTS_RE.search(line2) and not COMPANY_HINTS_RE.search(
-                    line1
-                ):
-                    title, company = line1, line2
-                elif COMPANY_HINTS_RE.search(line1) and not COMPANY_HINTS_RE.search(
-                    line2
-                ):
-                    title, company = line2, line1
-                else:
-                    title, company = line1, line2  # default
-        elif len(clean_headers) == 1:
-            line1 = clean_headers[0]
-            if ROLE_SEP_RE.search(line1):
-                title, company = split_role_and_company(line1)
-            else:
-                company = line1
-
-        if not location:
-            company, loc1 = extract_location(company)
-            title, loc2 = extract_location(title)
-            location = loc1 or loc2
-
-        if title_after_date:
-            if not title:
-                title = title_after_date
-            elif not company:
-                company = title_after_date
-
+        company, title, location = _resolve_entry_header(header_lines)
         bullets = extract_bullets(bullet_lines)
 
         if company or title or bullets:
@@ -399,7 +395,7 @@ def parse_experience(section_text: str) -> list[dict]:
                 {
                     "company": company,
                     "title": title,
-                    "dates": dates,
+                    "dates": extract_date_ranges(" | ".join(header_lines)),
                     "location": location,
                     "bullets": bullets,
                 }
@@ -453,135 +449,107 @@ _GRAD_YEAR_RE = re.compile(
 )
 
 
+_COURSES_RE = re.compile(r"^\s*(?:Relevant\s+)?Course(?:s|work)\s*:\s*(.+)$", re.IGNORECASE)
+_GPA_SUFFIX_RE = re.compile(r",?\s*\(?\s*C?GPA\b[^)]*\)?\s*$", re.IGNORECASE)
+
+
+def _has_degree(line: str) -> bool:
+    low = line.lower()
+    return any(kw.lower() in low for kw in _DEGREE_KEYWORDS)
+
+
+def _clean_school(line: str) -> str:
+    text = DATE_RANGE.sub("", line)
+    return _GPA_SUFFIX_RE.sub("", text).strip(" ,|–—-")
+
+
 def parse_education(section_text: str) -> list[dict]:
     """
     Parse the education section into structured entries.
 
     Returns a list of dicts matching:
-        {"school": str, "degree": str, "dates": str, "details": [str]}
+        {"school": str, "degree": str, "dates": str, "details": [str],
+         "courses": str}   # "courses" only when the résumé lists them
 
-    GPA, coursework, and other metadata go into details[].
+    Works whether the school or the degree comes first in each entry. A new
+    entry starts when a school or degree line arrives and the current entry
+    already has one.
     """
     if not section_text or not section_text.strip():
         return []
 
     raw_lines = [ln.strip() for ln in section_text.split("\n") if ln.strip()]
-    lines = normalize_bullet_lines(raw_lines)
-    lines = merge_continuation_lines(lines)
+    lines = merge_continuation_lines(normalize_bullet_lines(raw_lines))
 
     entries: list[dict] = []
-    pending_gpa = ""
-    pending_year = ""
+    current: dict = {}
 
-    def _new_entry() -> dict:
-        return {"school": "", "degree": "", "year": "", "gpa": ""}
-
-    current = _new_entry()
+    def _start_new() -> None:
+        nonlocal current
+        if current.get("school") or current.get("degree"):
+            entries.append(current)
+        current = {}
 
     for ln in lines:
-        if BULLET_INLINE_RE.match(ln):
+        courses_m = _COURSES_RE.match(ln)
+        if courses_m:
+            current["courses"] = courses_m.group(1).strip()
+            continue
+        if BULLET_INLINE_RE.match(ln) or is_location_line(ln):
             continue
 
         gpa_m = _GPA_RE.search(ln)
-        has_degree = any(kw.lower() in ln.lower() for kw in _DEGREE_KEYWORDS)
+        dates = extract_date_range(ln)
         year_m = _GRAD_YEAR_RE.search(ln)
-        date_range = extract_date_range(ln)
 
         # Parenthetical metadata line "(Grad: Dec 2027 | GPA: 3.83)"
-        if re.match(r"^\s*\(", ln) and not has_degree:
-            if gpa_m:
-                pending_gpa = gpa_m.group(1)
-            if year_m:
-                pending_year = year_m.group(0).strip()
-            continue
+        if ln.startswith("(") and not _has_degree(ln):
+            pass
+        elif _has_degree(ln):
+            if current.get("degree"):
+                _start_new()
+            # "School | Degree | City, ST | 2020" in any order: classify each part.
+            parts = [s.strip() for s in ROLE_SEP_RE.split(ln) if s.strip()]
+            degree = next((s for s in parts if _has_degree(s)), ln)
+            others = [
+                s for s in parts
+                if s != degree and not is_location_line(s) and not _GRAD_YEAR_RE.fullmatch(s)
+                and not DATE_RANGE.fullmatch(s)
+            ]
+            school = next((s for s in others if _SCHOOL_HINTS_RE.search(s)), others[0] if others else "")
+            current["degree"] = _GPA_SUFFIX_RE.sub("", DATE_RANGE.sub("", degree)).strip(" ,|–—-")
+            if school and not current.get("school"):
+                current["school"] = _clean_school(school)
+        elif _SCHOOL_HINTS_RE.search(ln) or (
+            not current.get("school") and not (dates or gpa_m or year_m)
+        ):
+            if current.get("school"):
+                _start_new()
+            school = _clean_school(ln)
+            if school:
+                current["school"] = school
 
-        if re.match(r"^\s*Courses?:", ln, re.IGNORECASE):
-            continue
+        if gpa_m and not current.get("gpa"):
+            current["gpa"] = gpa_m.group(1)
+        if not current.get("dates"):
+            if dates:
+                current["dates"] = dates
+            elif year_m and (ln.startswith("(") or _has_degree(ln)):
+                current["dates"] = year_m.group(0).strip()
 
-        if has_degree:
-            if current["degree"]:
-                entries.append(current)
-                current = _new_entry()
+    _start_new()
 
-            if pending_gpa:
-                current["gpa"] = pending_gpa
-                pending_gpa = ""
-            if pending_year:
-                current["year"] = pending_year
-                pending_year = ""
-
-            if ROLE_SEP_RE.search(ln):
-                parts = ROLE_SEP_RE.split(ln, maxsplit=1)
-                degree_part = parts[0].strip()
-                school_part = parts[1].strip() if len(parts) > 1 else ""
-                school_part = DATE_RANGE.sub("", school_part).strip()
-                school_part = (
-                    re.sub(r"\(C?GPA[^)]*\)", "", school_part)
-                    .strip()
-                    .rstrip(",")
-                    .strip()
-                )
-                current["degree"] = degree_part
-                current["school"] = school_part
-            else:
-                current["degree"] = ln
-
-            if gpa_m and not current["gpa"]:
-                current["gpa"] = gpa_m.group(1)
-            if date_range and not current["year"]:
-                current["year"] = date_range
-            elif year_m and not current["year"]:
-                current["year"] = year_m.group(0).strip()
-
-        elif current["degree"]:
-            _, loc = extract_location(ln)
-            if date_range and not current["year"]:
-                current["year"] = date_range
-            elif year_m and not current["year"]:
-                current["year"] = year_m.group(0).strip()
-            elif gpa_m and not current["gpa"]:
-                current["gpa"] = gpa_m.group(1)
-            elif loc and not ln.replace(loc, "").strip():
-                pass  # pure location — skip for education
-            elif _SCHOOL_HINTS_RE.search(ln) and not current["school"]:
-                school_clean = DATE_RANGE.sub("", ln).strip()
-                school_clean = (
-                    re.sub(r"\(C?GPA[^)]*\)", "", school_clean)
-                    .strip()
-                    .rstrip(",")
-                    .strip()
-                )
-                current["school"] = school_clean
-            elif not current["school"] and not date_range:
-                if current["degree"] and len(current["degree"]) < 10:
-                    current["degree"] = current["degree"] + " " + ln
-                elif not current["school"]:
-                    current["school"] = ln
-        else:
-            if date_range and not current["year"]:
-                current["year"] = date_range
-            elif year_m and not current["year"]:
-                current["year"] = year_m.group(0).strip()
-            elif not current["school"]:
-                current["school"] = ln
-
-    if current["school"] or current["degree"]:
-        entries.append(current)
-
-    # Convert internal format → contract format
     result: list[dict] = []
     for e in entries:
-        details: list[str] = []
-        if e.get("gpa"):
-            details.append(f"GPA: {e['gpa']}")
-        result.append(
-            {
-                "school": e.get("school", ""),
-                "degree": e.get("degree", ""),
-                "dates": e.get("year", ""),
-                "details": details,
-            }
-        )
+        entry = {
+            "school": e.get("school", ""),
+            "degree": e.get("degree", ""),
+            "dates": e.get("dates", ""),
+            "details": [f"GPA: {e['gpa']}"] if e.get("gpa") else [],
+        }
+        if e.get("courses"):
+            entry["courses"] = e["courses"]
+        result.append(entry)
 
     log.info("Parsed %d education entries", len(result))
     return result
@@ -595,12 +563,37 @@ _TECH_STACK_HEADER_RE = re.compile(r"^Tech\s+Stack\s*:", re.IGNORECASE)
 _INLINE_PROJECT_RE = re.compile(r"^[•●○▪▸\-–—\*]\s+(.+?)\s*(?:\(\d{4}\))?\s*:\s+(.+)$")
 
 
+# Link labels that trail a project name: "(GitHub)", "(Demo | Frontend | Backend)"
+_LINK_PAREN_RE = re.compile(
+    r"\s*\((?:[^)]*\b(?:github|link|demo|live|code|repo|website|frontend|backend)\b[^)]*)\)",
+    re.IGNORECASE,
+)
+
+
+def _split_project_header(header: str) -> tuple[str, str, list[str]]:
+    """
+    "ResumeAI | AI Resume Platform | Python, FastAPI (GitHub)"
+        → ("ResumeAI", "AI Resume Platform", ["Python", "FastAPI"])
+
+    The last part counts as a tech stack only when it is a comma list.
+    """
+    header = _LINK_PAREN_RE.sub("", header)
+    parts = split_outside_parens(re.sub(r"\s+[–—]\s+", "|", header), separators="|")
+    if not parts:
+        return "", "", []
+    name, rest = parts[0], parts[1:]
+    technologies: list[str] = []
+    if rest and "," in rest[-1]:
+        technologies = split_outside_parens(rest.pop(), separators=",")
+    return name, " | ".join(rest), technologies
+
+
 def parse_projects(section_text: str) -> list[dict]:
     """
     Parse the projects section into structured entries.
 
     Returns a list of dicts matching:
-        {"name": str, "description": str, "bullets": [str]}
+        {"name": str, "description": str, "technologies": [str], "bullets": [str]}
     """
     if not section_text or not section_text.strip():
         return []
@@ -660,6 +653,7 @@ def parse_projects(section_text: str) -> list[dict]:
                     {
                         "name": proj_name,
                         "description": "",
+                        "technologies": [],
                         "bullets": [proj_desc] if len(proj_desc) > 15 else [],
                     }
                 )
@@ -694,13 +688,9 @@ def parse_projects(section_text: str) -> list[dict]:
 
         header_text = " ".join(header_lines)
         header_clean = DATE_RANGE.sub("", header_text).strip().rstrip("–—- ").strip()
+        name, subtitle, technologies = _split_project_header(header_clean)
 
-        sep_parts = re.split(r"\s+[|–—]\s+", header_clean)
-        name = sep_parts[0].strip() if sep_parts else header_clean
-        name = re.sub(r"\s*\(Link\)\s*", "", name).strip()
-        name = re.sub(r"\s*\([^)]*Github[^)]*\)", "", name, flags=re.IGNORECASE).strip()
-
-        description = " ".join(description_lines).strip()
+        description = " ".join(description_lines).strip() or subtitle
         bullets = extract_bullets(bullet_lines)
 
         # No-bullet projects: long description lines become bullets
@@ -711,13 +701,14 @@ def parse_projects(section_text: str) -> list[dict]:
                     implicit.append(dl)
             if implicit:
                 bullets = implicit
-                description = ""
+                description = subtitle
 
         if name and (bullets or description):
             parsed.append(
                 {
                     "name": name,
                     "description": description,
+                    "technologies": technologies,
                     "bullets": bullets,
                 }
             )
@@ -730,62 +721,123 @@ def parse_projects(section_text: str) -> list[dict]:
 # SKILLS SECTION PARSER
 # ─────────────────────────────────────────────────────────────────────────────
 
+# "Languages: Python, Go" or a label alone on its line ("Languages:") with the
+# items on the next line. Matched per line so a label never swallows the last
+# item of the line above it.
+_SKILL_LABEL_RE = re.compile(r"^([A-Za-z][A-Za-z0-9 &/+.\-]{0,40}?)\s*:\s*(.*)$")
 
-def parse_skills_section(section_text: str) -> list[str]:
-    """
-    Parse the skills section into a flat list of individual skill strings.
+# Labels inside a skills block that hold something other than skills.
+_NON_SKILL_LABEL_RE = re.compile(
+    r"^(?:certifications?|certificates?|licenses?|profiles?|links?|interests?"
+    r"|hobbies|awards?|achievements?|honou?rs?|spoken\s+languages?)$",
+    re.IGNORECASE,
+)
+_CERT_LABEL_RE = re.compile(r"^(?:certifications?|certificates?|licenses?)$", re.IGNORECASE)
 
-    Handles category labels with or without colons:
-        "Languages: Python, Java"
-        "Frameworks & Libraries: React, Django"
-        "Frameworks & React, Next.js"   (malformed — no colon)
+_PAREN_GROUP_RE = re.compile(r"^(.*?)\s*\((.*)\)\s*$")
+
+
+def _group_skill_lines(section_text: str) -> list[tuple[str, str]]:
     """
+    Collapse the skills block into (label, items_text) groups.
+
+    Unlabelled lines continue the group above. A line that ends in "," or "-"
+    was wrapped mid-list and is joined without inserting a separator.
+    """
+    groups: list[list[str]] = []
+    for raw in section_text.split("\n"):
+        line = raw.strip().strip("•●▪").strip()
+        if not line:
+            continue
+        m = _SKILL_LABEL_RE.match(line)
+        if m and len(m.group(1).split()) <= 5:
+            groups.append([m.group(1).strip(), m.group(2).strip()])
+            continue
+        if not groups:
+            groups.append(["", line])
+            continue
+        prev = groups[-1][1]
+        if not prev:
+            groups[-1][1] = line
+        elif prev.endswith("-"):
+            groups[-1][1] = prev + line
+        elif prev.endswith(","):
+            groups[-1][1] = f"{prev} {line}"
+        else:
+            groups[-1][1] = f"{prev}, {line}"
+    return [(label, text) for label, text in groups if text]
+
+
+def _skill_items(items_text: str) -> list[str]:
+    items = []
+    for item in split_outside_parens(items_text):
+        item = item.strip().strip("•-–— ").strip()
+        if len(item) > 1 or item in {"C", "R"}:
+            items.append(item)
+    return items
+
+
+def parse_skills_block(section_text: str) -> tuple[list[dict], dict[str, str]]:
+    """
+    Parse the skills section.
+
+    Returns:
+        categories: [{"category": str, "skills": [str]}] in résumé order, with
+                    each item exactly as written ("AWS (EC2, S3)").
+        other:      non-skill lines found inside the block, keyed by label
+                    (e.g. {"Certifications": "Meta Front-End Developer, ..."}).
+    """
+    categories: list[dict] = []
+    other: dict[str, str] = {}
     if not section_text or not section_text.strip():
-        return []
+        return categories, other
 
-    # Strip category labels WITH colons
-    cleaned = re.sub(
-        r"(?:[A-Z][A-Za-z]*(?:\s+[A-Za-z]+)*)"
-        r"(?:\s*[&/]\s*(?:[A-Z][A-Za-z]*(?:\s+[A-Za-z]+)*))?",
-        lambda m: "" if m.group(0).rstrip().endswith(":") else m.group(0),
-        section_text,
-    )
-    # Simpler approach — direct colon removal
-    cleaned = re.sub(
-        r"(?:[A-Z][A-Za-z]*(?:\s+[A-Za-z]+)*)"
-        r"(?:\s*[&/]\s*(?:[A-Z][A-Za-z]*(?:\s+[A-Za-z]+)*))?"
-        r"\s*:\s*",
-        "",
-        section_text,
-    )
+    for label, text in _group_skill_lines(section_text):
+        if label and _NON_SKILL_LABEL_RE.match(label):
+            other[label] = text
+            continue
+        items = _skill_items(text)
+        if items:
+            categories.append({"category": label or "Skills", "skills": items})
 
-    # Strip known category labels WITHOUT colons (start of line)
-    cleaned = re.sub(
-        r"^(?:Languages?|Programming\s+Languages?|Frameworks?|Tools?|"
-        r"Technologies|Databases?|Platforms?|Libraries|DevOps|Cloud|"
-        r"Other\s+Skills?|Software|Hardware|Web(?:\s+Development)?|"
-        r"Mobile|Backend|Frontend|Data|Infrastructure|Concepts?|"
-        r"Core\s+Competencies)"
-        r"(?:\s*[&/]\s*"
-        r"(?:Languages?|Frameworks?|Tools?|Technologies|Databases?|"
-        r"Platforms?|Libraries|DevOps|Cloud|Other|Software|Hardware|"
-        r"Web|Mobile|Backend|Frontend|Data|Infrastructure|ML|AI|Concepts?))?",
-        "",
-        cleaned,
-        flags=re.IGNORECASE | re.MULTILINE,
+    log.info(
+        "Parsed %d skill categories (%d skills)",
+        len(categories),
+        sum(len(c["skills"]) for c in categories),
     )
+    return categories, other
 
-    skills: list[str] = []
+
+def flatten_skills(categories: list[dict]) -> list[str]:
+    """
+    One flat, deduplicated list of individual skills.
+
+    A parenthesised list is expanded so each part can be matched on its own:
+    "AWS (EC2, S3)" → "AWS", "EC2", "S3". A non-list qualifier is dropped:
+    "Python (advanced)" → "Python".
+    """
+    flat: list[str] = []
     seen: set[str] = set()
-    for token in re.split(r"[,|•●;]\s*|\n", cleaned):
-        s = token.strip().strip("•-–— ")
-        s = re.sub(r"^[&/]\s*", "", s).strip()
-        if s and len(s) > 1 and s.lower() not in seen:
-            seen.add(s.lower())
-            skills.append(s)
 
-    log.info("Parsed %d skills from skills section", len(skills))
-    return skills
+    def _add(name: str) -> None:
+        name = name.strip()
+        key = canonical_skill(name).lower()
+        if name and key not in seen:
+            seen.add(key)
+            flat.append(name)
+
+    for cat in categories:
+        for item in cat["skills"]:
+            m = _PAREN_GROUP_RE.match(item)
+            if not m:
+                _add(item)
+                continue
+            _add(m.group(1))
+            inner = split_outside_parens(m.group(2))
+            if len(inner) > 1:
+                for sub in inner:
+                    _add(sub)
+    return flat
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -799,197 +851,38 @@ def _aggregate_all_skills(
     projects: list[dict],
 ) -> list[str]:
     """
-    Union of skills from:
-      - skills section (raw strings)
+    Every skill the résumé evidences, in canonical spelling, from:
+      - the skills section (each entry, plus vocabulary terms inside it,
+        so "Linux/Unix Terminal" also yields "Linux" and "Unix")
       - vocabulary matches in experience bullets
-      - vocabulary matches in project bullets/descriptions
-
-    Returns deduplicated, canonically-cased list.
+      - vocabulary matches in project bullets, descriptions and tech stacks
     """
     seen: set[str] = set()
     result: list[str] = []
 
     def _add(items: list[str]) -> None:
         for s in items:
-            key = s.lower()
-            if key not in seen:
-                seen.add(key)
-                result.append(s)
+            canon = canonical_skill(s)
+            if canon.lower() not in seen:
+                seen.add(canon.lower())
+                result.append(canon)
 
     # Skills section first (highest signal)
-    _add(skills_section)
+    for skill in skills_section:
+        _add([skill])
+        _add(extract_skills(skill))
 
-    # Vocabulary-matched skills from experience bullets
-    all_exp_text = " ".join(b for entry in experience for b in entry.get("bullets", []))
-    _add(extract_skills(all_exp_text))
+    _add(extract_skills(" ".join(b for e in experience for b in e.get("bullets", []))))
 
-    # Vocabulary-matched skills from projects
-    all_proj_text = " ".join(
-        b
-        for entry in projects
-        for b in ([entry.get("description", "")] + entry.get("bullets", []))
-        if b
+    project_text = " ".join(
+        part
+        for p in projects
+        for part in [p.get("description", ""), *p.get("bullets", []), *p.get("technologies", [])]
+        if part
     )
-    _add(extract_skills(all_proj_text))
+    _add(extract_skills(project_text))
 
     return result
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# CATEGORIZED SKILLS PARSER  (preserves "Label: skill1, skill2" structure)
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def parse_skills_section_categorized(section_text: str) -> list[dict]:
-    """
-    Parse the skills section preserving category labels.
-
-    Returns a list of dicts: [{"category": str, "skills": [str]}, ...]
-    Falls back to a single "Skills" category if no labels are detected.
-    """
-    if not section_text or not section_text.strip():
-        return []
-
-    categories: list[dict] = []
-    _CAT_LINE = re.compile(r"^([A-Za-z][A-Za-z\s&/]+):\s*(.*)$")
-
-    for line in section_text.strip().split("\n"):
-        line = line.strip()
-        if not line:
-            continue
-        m = _CAT_LINE.match(line)
-        if m:
-            cat_name = m.group(1).strip()
-            skills_str = m.group(2).strip()
-            skills = [s.strip() for s in re.split(r"[,|;]", skills_str) if s.strip()]
-            if skills:
-                categories.append({"category": cat_name, "skills": skills})
-        elif categories:
-            # continuation line — append skills to last category
-            extra = [s.strip() for s in re.split(r"[,|;]", line) if s.strip()]
-            categories[-1]["skills"].extend(extra)
-
-    if not categories:
-        # No category labels found — return flat as single group
-        flat = [s.strip() for s in re.split(r"[,|;\n]", section_text) if s.strip()]
-        if flat:
-            categories = [{"category": "Skills", "skills": flat}]
-
-    return categories
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# EXTRA SECTIONS PARSER  (publications, leadership, achievements, certifications)
-# ─────────────────────────────────────────────────────────────────────────────
-
-_EXTRA_SECTION_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
-    (
-        "publications",
-        re.compile(
-            r"^(research\s*(&|and)\s*)?publications?|^research$",
-            re.IGNORECASE | re.MULTILINE,
-        ),
-    ),
-    (
-        "leadership",
-        re.compile(
-            r"^leadership(\s*(and|&)\s*teaching)?|^teaching\s+experience",
-            re.IGNORECASE | re.MULTILINE,
-        ),
-    ),
-    (
-        "achievements",
-        re.compile(
-            r"^achievements?|^extracurricular|^honors?|^awards?",
-            re.IGNORECASE | re.MULTILINE,
-        ),
-    ),
-    (
-        "certifications",
-        re.compile(
-            r"^certifications?|^licenses?",
-            re.IGNORECASE | re.MULTILINE,
-        ),
-    ),
-]
-
-
-def parse_extra_sections(raw_text: str) -> dict[str, str]:
-    """
-    Extract extra resume sections (publications, leadership, achievements)
-    as raw text blocks keyed by section name.
-    """
-    lines = raw_text.split("\n")
-    result: dict[str, str] = {}
-    boundaries: list[tuple[int, str]] = []
-    seen: set[str] = set()
-
-    for i, line in enumerate(lines):
-        stripped = line.strip()
-        if not stripped or len(stripped) > 60:
-            continue
-        if stripped.endswith((".", "!", "?", ",")):
-            continue
-        for section_name, pattern in _EXTRA_SECTION_PATTERNS:
-            if pattern.search(stripped) and section_name not in seen:
-                boundaries.append((i, section_name))
-                seen.add(section_name)
-                break
-
-    for idx, (line_num, section_name) in enumerate(boundaries):
-        start = line_num + 1
-        end = boundaries[idx + 1][0] if idx + 1 < len(boundaries) else len(lines)
-        body = "\n".join(lines[start:end]).strip()
-        if body:
-            result[section_name] = body
-
-    return result
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# COURSES EXTRACTOR  (from education section text)
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def extract_courses_from_education_text(section_text: str) -> dict[str, str]:
-    """
-    Extract "Courses: ..." lines and associate them with the most recent
-    degree entry found before the courses line.
-    Returns {degree_keyword: courses_string}.
-    """
-    courses: dict[str, str] = {}
-    lines = [l.strip() for l in section_text.split("\n") if l.strip()]
-    last_degree = ""
-
-    for line in lines:
-        # Detect degree lines
-        if any(
-            kw.lower() in line.lower()
-            for kw in [
-                "Bachelor",
-                "Master",
-                "B.S.",
-                "M.S.",
-                "B.E",
-                "M.E",
-                "B.Tech",
-                "M.Tech",
-                "Associate",
-                "Diploma",
-                "BS ",
-                "MS ",
-                "MASTER",
-                "BACHELOR",
-            ]
-        ):
-            last_degree = line[:60]
-
-        # Detect course lines
-        m = re.search(r"Courses?\s*:\s*(.+)", line, re.IGNORECASE)
-        if m and last_degree:
-            courses[last_degree] = m.group(1).strip()
-
-    return courses
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1001,20 +894,22 @@ def parse_resume(file_path: str) -> dict:
     """
     Parse a résumé PDF into the Stage 1 → Stage 2 JSON contract.
 
-    Args:
-        file_path: Absolute or relative path to the PDF file.
-
     Returns:
         {
-          "contact": {"name": str, "email": str, "phone": str},
+          "contact": {"name", "email", "phone", "linkedin", "location"},
           "sections": {
-            "experience": [...],
-            "education":  [...],
-            "skills":     [...],
-            "projects":   [...]
+            "experience":         [{"company", "title", "dates", "location", "bullets"}],
+            "education":          [{"school", "degree", "dates", "details", "courses"?}],
+            "skills":             [str],     # flat, one entry per skill
+            "skills_categorized": [{"category": str, "skills": [str]}],
+            "projects":           [{"name", "description", "technologies", "bullets"}],
           },
-          "all_skills_detected": [...]
+          "extra_sections": {"publications" | "leadership" | "achievements"
+                             | "certifications": raw text},
+          "all_skills_detected": [str],  # canonical names, for matching
         }
+
+    "projects" also includes any OPEN SOURCE section entries.
 
     Raises:
         FileNotFoundError: if the PDF does not exist.
@@ -1028,23 +923,20 @@ def parse_resume(file_path: str) -> dict:
 
     experience = parse_experience(sections.get("experience", ""))
     education = parse_education(sections.get("education", ""))
-    projects = parse_projects(sections.get("projects", ""))
-    skills = parse_skills_section(sections.get("skills", ""))
-    skills_categorized = parse_skills_section_categorized(sections.get("skills", ""))
+    projects = parse_projects(sections.get("projects", "")) + parse_projects(
+        sections.get("open_source", "")
+    )
+    skills_categorized, skills_other = parse_skills_block(sections.get("skills", ""))
+    skills = flatten_skills(skills_categorized)
 
-    # Courses per degree from education section text
-    courses_map = extract_courses_from_education_text(sections.get("education", ""))
-    for edu_entry in education:
-        for degree_key, courses_str in courses_map.items():
-            if (
-                edu_entry.get("degree", "")[:40].lower() in degree_key.lower()
-                or degree_key.lower() in edu_entry.get("degree", "").lower()
-            ):
-                edu_entry["courses"] = courses_str
-                break
-
-    # Extra sections: publications, leadership, achievements
-    extra_sections = parse_extra_sections(raw_text)
+    extra_sections = {k: sections[k] for k in EXTRA_SECTIONS if k in sections}
+    # An inline "Certifications: ..." line inside the skills block.
+    if "certifications" not in extra_sections:
+        certs = [t for label, t in skills_other.items() if _CERT_LABEL_RE.match(label)]
+        if certs:
+            extra_sections["certifications"] = "\n".join(
+                f"• {c}" for t in certs for c in split_outside_parens(t, separators=",;")
+            )
 
     all_skills = _aggregate_all_skills(skills, experience, projects)
 

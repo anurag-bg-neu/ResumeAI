@@ -2,7 +2,7 @@
 utils.py — Shared utilities for the ResumeAI parsing pipeline.
 
 Responsibilities:
-  - PDF text extraction (PyMuPDF / fitz)
+  - PDF text extraction (PyMuPDF)
   - Shared regex patterns
   - Text normalization helpers (bullet lines, continuation lines)
   - Bullet / date / location extraction helpers
@@ -70,286 +70,264 @@ COMPANY_HINTS_RE: re.Pattern[str] = re.compile(
     re.IGNORECASE,
 )
 
+# A job title ends in a role noun: "Software Development Engineer",
+# "Data Analytics Intern", "Teaching Assistant", "Senior SWE II".
+ROLE_WORD_RE: re.Pattern[str] = re.compile(
+    r"\b(?:engineer|developer|scientist|architect|analyst|intern|manager|"
+    r"programmer|consultant|specialist|designer|administrator|associate|"
+    r"technologist|researcher|assistant|fellow|lead|director|founder|"
+    r"co-founder|head|officer|SDE|SWE|MTS)\b",
+    re.IGNORECASE,
+)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SKILL VOCABULARY
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Canonical skill names. Every match — from a JD, a bullet, or a skills
+# section — is reported in this spelling, so "React.js" on a resume and
+# "React" in a JD compare equal.
 KNOWN_SKILLS: frozenset[str] = frozenset(
     {
         # ── Languages ──────────────────────────────────────────────────────
-        "Python",
-        "Java",
-        "JavaScript",
-        "TypeScript",
-        "C",
-        "C++",
-        "C#",
-        "Go",
-        "Golang",
-        "Rust",
-        "Ruby",
-        "PHP",
-        "Swift",
-        "Kotlin",
-        "Scala",
-        "R",
-        "MATLAB",
-        "Perl",
-        "Shell",
-        "Bash",
-        "PowerShell",
-        "Haskell",
-        "Erlang",
-        "Elixir",
-        "Clojure",
-        "Dart",
-        "Lua",
-        "Assembly",
-        "COBOL",
-        "Fortran",
-        "Groovy",
+        "Python", "Java", "JavaScript", "TypeScript", "C", "C++", "C#", "Go",
+        "Rust", "Ruby", "PHP", "Swift", "Kotlin", "Scala", "R", "MATLAB",
+        "Perl", "Shell", "Bash", "PowerShell", "Haskell", "Erlang", "Elixir",
+        "Clojure", "Dart", "Lua", "Assembly", "COBOL", "Fortran", "Groovy",
+        "SQL",
         # ── Web / Frontend ─────────────────────────────────────────────────
-        "HTML",
-        "CSS",
-        "Sass",
-        "SCSS",
-        "Less",
-        "React",
-        "Angular",
-        "Vue",
-        "Vue.js",
-        "Next.js",
-        "Nuxt.js",
-        "Svelte",
-        "SvelteKit",
-        "Remix",
-        "Gatsby",
-        "jQuery",
-        "Bootstrap",
-        "Tailwind",
-        "Tailwind CSS",
-        "Webpack",
-        "Vite",
-        "Rollup",
-        "Babel",
-        "ESLint",
-        "Prettier",
+        "HTML", "CSS", "Sass", "Less", "React", "Angular", "Vue", "Next.js",
+        "Nuxt.js", "Svelte", "SvelteKit", "Remix", "Gatsby", "jQuery",
+        "Bootstrap", "Tailwind CSS", "Redux", "Webpack", "Vite", "Rollup",
+        "Babel", "ESLint", "Prettier", "Storybook",
         # ── Backend / Frameworks ───────────────────────────────────────────
-        "Node.js",
-        "Express",
-        "Express.js",
-        "NestJS",
-        "FastAPI",
-        "Django",
-        "Flask",
-        "Spring",
-        "Spring Boot",
-        "Rails",
-        "Ruby on Rails",
-        "Laravel",
-        "ASP.NET",
-        ".NET",
-        "gRPC",
-        "GraphQL",
-        "REST",
-        "RESTful",
-        "WebSockets",
-        "WebSocket",
-        "Gin",
-        "Fiber",
-        "Actix",
+        "Node.js", "Express", "NestJS", "FastAPI", "Django", "Flask", "Spring",
+        "Spring Boot", "Ruby on Rails", "Laravel", "ASP.NET", ".NET", "gRPC",
+        "GraphQL", "REST", "WebSockets", "Gin", "Fiber", "Actix", "Mongoose",
+        "Nginx",
         # ── Databases ──────────────────────────────────────────────────────
-        "PostgreSQL",
-        "MySQL",
-        "SQLite",
-        "SQL Server",
-        "Oracle",
-        "MariaDB",
-        "MongoDB",
-        "DynamoDB",
-        "Cassandra",
-        "Redis",
-        "Elasticsearch",
-        "Neo4j",
-        "CouchDB",
-        "Firebase",
-        "Firestore",
-        "Supabase",
-        "InfluxDB",
+        "PostgreSQL", "MySQL", "SQLite", "SQL Server", "Oracle", "MariaDB",
+        "MongoDB", "DynamoDB", "Cassandra", "Redis", "Elasticsearch", "Neo4j",
+        "CouchDB", "Firebase", "Firestore", "Supabase", "InfluxDB",
         "TimescaleDB",
         # ── Cloud / DevOps ─────────────────────────────────────────────────
-        "AWS",
-        "Azure",
-        "GCP",
-        "Google Cloud",
-        "Docker",
-        "Kubernetes",
-        "k8s",
-        "Terraform",
-        "Ansible",
-        "Puppet",
-        "Chef",
-        "Jenkins",
-        "CircleCI",
-        "GitHub Actions",
-        "GitLab CI",
-        "CI/CD",
-        "Helm",
-        "Istio",
-        "Prometheus",
-        "Grafana",
-        "Datadog",
-        "New Relic",
-        "PagerDuty",
-        "ECS",
-        "EKS",
-        "Lambda",
-        "S3",
-        "RDS",
-        "ElastiCache",
-        "EC2",
-        "SNS",
-        "SQS",
+        "AWS", "Azure", "GCP", "Docker", "Kubernetes", "Terraform", "Ansible",
+        "Puppet", "Chef", "Jenkins", "CircleCI", "GitHub Actions", "GitLab CI",
+        "CI/CD", "Helm", "Istio", "Prometheus", "Grafana", "Datadog",
+        "New Relic", "PagerDuty", "ECS", "EKS", "Lambda", "S3", "RDS",
+        "ElastiCache", "EC2", "SNS", "SQS", "Vercel", "Heroku", "Netlify",
+        "Oracle Cloud",
         # ── AI / ML ────────────────────────────────────────────────────────
-        "TensorFlow",
-        "PyTorch",
-        "Keras",
-        "scikit-learn",
-        "sklearn",
-        "pandas",
-        "NumPy",
-        "SciPy",
-        "Matplotlib",
-        "Seaborn",
-        "Plotly",
-        "Hugging Face",
-        "transformers",
-        "LangChain",
-        "LlamaIndex",
-        "OpenAI",
-        "RAG",
-        "LLM",
-        "NLP",
-        "NLTK",
-        "spaCy",
-        "XGBoost",
-        "LightGBM",
-        "CatBoost",
-        "MLflow",
-        "CUDA",
-        "OpenCV",
-        "Stable Diffusion",
-        "Generative AI",
+        "TensorFlow", "PyTorch", "Keras", "scikit-learn", "pandas", "NumPy",
+        "SciPy", "Matplotlib", "Seaborn", "Plotly", "Hugging Face",
+        "Transformers", "LangChain", "LlamaIndex", "OpenAI", "RAG", "LLM",
+        "NLP", "NLTK", "spaCy", "XGBoost", "LightGBM", "CatBoost", "MLflow",
+        "CUDA", "OpenCV", "Stable Diffusion", "Generative AI",
+        "Machine Learning", "Deep Learning", "Computer Vision",
         # ── Data Engineering ───────────────────────────────────────────────
-        "Spark",
-        "Apache Spark",
-        "Hadoop",
-        "Apache Kafka",
-        "Airflow",
-        "Apache Airflow",
-        "Apache Flink",
-        "dbt",
-        "Snowflake",
-        "BigQuery",
-        "Redshift",
-        "Databricks",
-        "Hive",
-        "Presto",
-        "Trino",
-        "Parquet",
-        "Avro",
-        "RabbitMQ",
-        "Celery",
-        "Pub/Sub",
+        "Spark", "Hadoop", "Kafka", "Airflow", "Flink", "dbt", "Snowflake",
+        "BigQuery", "Redshift", "Databricks", "Hive", "Presto", "Trino",
+        "Parquet", "Avro", "RabbitMQ", "Celery", "Pub/Sub",
         # ── Version Control / Collaboration ────────────────────────────────
-        "Git",
-        "GitHub",
-        "GitLab",
-        "Bitbucket",
-        "SVN",
-        "Jira",
-        "Confluence",
+        "Git", "GitHub", "GitLab", "Bitbucket", "SVN", "Jira", "Confluence",
         "Linear",
         # ── Finance-specific ───────────────────────────────────────────────
-        "QuantLib",
-        "Open Source Risk Engine",
-        "Bloomberg",
-        "Excel",
-        "VBA",
+        "QuantLib", "Open Source Risk Engine", "Bloomberg", "Excel", "VBA",
         # ── Testing ────────────────────────────────────────────────────────
-        "pytest",
-        "JUnit",
-        "Mocha",
-        "Jest",
-        "Cypress",
-        "Selenium",
-        "Playwright",
-        "Postman",
-        "unittest",
+        "pytest", "JUnit", "Mocha", "Jest", "Vitest", "Cypress", "Selenium",
+        "Playwright", "Postman", "unittest",
         # ── Data Viz / BI ──────────────────────────────────────────────────
-        "Tableau",
-        "Power BI",
-        "Looker",
+        "Tableau", "Power BI", "Looker",
         # ── Protocols / Standards ──────────────────────────────────────────
-        "Protocol Buffers",
-        "OpenAPI",
-        "Swagger",
-        "OAuth",
-        "JWT",
-        "SSL",
-        "TLS",
-        "SAML",
-        "LDAP",
+        "Protocol Buffers", "OpenAPI", "Swagger", "OAuth", "JWT", "SSL", "TLS",
+        "SAML", "LDAP",
         # ── Mobile ─────────────────────────────────────────────────────────
-        "React Native",
-        "Flutter",
-        "iOS",
-        "Android",
-        "Xcode",
-        # ── Misc ───────────────────────────────────────────────────────────
-        "Linux",
-        "Unix",
-        "SSH",
-        "Agile",
-        "Scrum",
-        "Kanban",
-        "Microservices",
-        "Serverless",
+        "React Native", "Flutter", "iOS", "Android", "Xcode",
+        # ── Concepts / Practices ───────────────────────────────────────────
+        "Linux", "Unix", "SSH", "Agile", "Scrum", "Kanban", "Microservices",
+        "Serverless", "Distributed Systems", "System Design", "OOP",
+        "Data Structures and Algorithms",
     }
 )
 
-# Build a mapping of lowercase → canonical for fast lookup
-_SKILLS_LOWER: dict[str, str] = {s.lower(): s for s in KNOWN_SKILLS}
+# Alternate spellings → canonical name. Keys are lowercase.
+SKILL_ALIASES: dict[str, str] = {
+    "golang": "Go",
+    "react.js": "React",
+    "reactjs": "React",
+    "vue.js": "Vue",
+    "vuejs": "Vue",
+    "angular.js": "Angular",
+    "angularjs": "Angular",
+    "node": "Node.js",
+    "nodejs": "Node.js",
+    "express.js": "Express",
+    "expressjs": "Express",
+    "nextjs": "Next.js",
+    "nest.js": "NestJS",
+    "tailwind": "Tailwind CSS",
+    "scss": "Sass",
+    "rails": "Ruby on Rails",
+    "restful": "REST",
+    "rest api": "REST",
+    "rest apis": "REST",
+    "restful api": "REST",
+    "restful apis": "REST",
+    "websocket": "WebSockets",
+    "postgres": "PostgreSQL",
+    "mongo": "MongoDB",
+    "ms sql": "SQL Server",
+    "mssql": "SQL Server",
+    "amazon web services": "AWS",
+    "google cloud": "GCP",
+    "google cloud platform": "GCP",
+    "microsoft azure": "Azure",
+    "k8s": "Kubernetes",
+    "ci / cd": "CI/CD",
+    "cicd": "CI/CD",
+    "aws lambda": "Lambda",
+    "amazon s3": "S3",
+    "aws s3": "S3",
+    "amazon ec2": "EC2",
+    "sklearn": "scikit-learn",
+    "scikit learn": "scikit-learn",
+    "numpy": "NumPy",
+    "huggingface": "Hugging Face",
+    "llms": "LLM",
+    "large language models": "LLM",
+    "genai": "Generative AI",
+    "gen ai": "Generative AI",
+    "ml": "Machine Learning",
+    "natural language processing": "NLP",
+    "apache spark": "Spark",
+    "pyspark": "Spark",
+    "apache kafka": "Kafka",
+    "apache airflow": "Airflow",
+    "apache flink": "Flink",
+    "github action": "GitHub Actions",
+    "gitlab ci/cd": "GitLab CI",
+    "powerbi": "Power BI",
+    "protobuf": "Protocol Buffers",
+    "oauth2": "OAuth",
+    "oauth 2.0": "OAuth",
+    "object-oriented programming": "OOP",
+    "object-oriented design": "OOP",
+    "object oriented programming": "OOP",
+    "object oriented design": "OOP",
+    "dsa": "Data Structures and Algorithms",
+    "data structures": "Data Structures and Algorithms",
+    "algorithms": "Data Structures and Algorithms",
+    "microservice": "Microservices",
+}
+
+# Skills that are also ordinary English words (or single letters). In free
+# text these only count when written in their canonical capitalization, so
+# "go above and beyond" or "the rest of the team" don't register as skills.
+_CASE_SENSITIVE: frozenset[str] = frozenset(
+    {
+        "C", "R", "Go", "Rust", "Swift", "Dart", "Lua", "Shell", "Assembly",
+        "Less", "Remix", "Express", "Spring", "Gin", "Fiber", "Chef", "Puppet",
+        "Helm", "Lambda", "Spark", "Hive", "Presto", "Airflow", "Celery",
+        "Linear", "Jest", "Mocha", "Cypress", "REST", "RAG", "Excel", "Oracle",
+        "Flask", "Vite", "Avro", "Parquet",
+    }
+)
+
+_CANONICAL_BY_LOWER: dict[str, str] = {s.lower(): s for s in KNOWN_SKILLS}
+
+
+def canonical_skill(name: str) -> str:
+    """
+    Map a skill string to its canonical spelling.
+
+    Unknown skills come back stripped but otherwise untouched, so callers can
+    compare canonical forms without losing skills the vocabulary lacks.
+    """
+    key = re.sub(r"\s+", " ", name).strip()
+    low = key.lower()
+    return SKILL_ALIASES.get(low) or _CANONICAL_BY_LOWER.get(low) or key
+
+
+def _skill_pattern(term: str, case_sensitive: bool) -> re.Pattern[str]:
+    # Boundaries are "not part of a longer token". A trailing period is allowed
+    # (sentence end: "...with Python.") but not ".js" style suffixes, and a
+    # single-letter language must not sit inside a hyphenated word ("C-suite").
+    left = r"(?<![\w+#])(?<!\w\.)"
+    right = r"(?![\w+#])(?!\.\w)"
+    if len(term) == 1:
+        left += r"(?<!-)"
+        right += r"(?!-)"
+    flags = 0 if case_sensitive else re.IGNORECASE
+    return re.compile(left + re.escape(term) + right, flags)
+
+
+# Aliases that are fine for normalizing a skills-section entry but too generic
+# to trust in free text ("a node in the graph", "50 ml").
+_ALIASES_NOT_IN_FREE_TEXT: frozenset[str] = frozenset(
+    {"node", "ml", "algorithms", "data structures", "rails", "mongo"}
+)
+
+# (pattern, canonical) for every canonical name and alias, longest first so
+# "Spring Boot" claims its text before "Spring" is tried.
+_SKILL_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (_skill_pattern(term, canon in _CASE_SENSITIVE and term == canon), canon)
+    for term, canon in sorted(
+        [(s, s) for s in KNOWN_SKILLS]
+        + [(a, c) for a, c in SKILL_ALIASES.items() if a not in _ALIASES_NOT_IN_FREE_TEXT],
+        key=lambda tc: -len(tc[0]),
+    )
+]
 
 
 def extract_skills(text: str) -> list[str]:
     """
-    Extract recognized tech skills from arbitrary text.
+    Find vocabulary skills mentioned anywhere in free text.
 
-    Strategy:
-      1. Vocabulary match (case-insensitive, word-boundary aware).
-         Returns the canonical casing stored in KNOWN_SKILLS.
-      2. Deduplication preserving first-seen order.
-
-    This is intentionally dependency-free (no spaCy, no ML).
+    Returns canonical names, deduplicated, longest terms first. A term inside a
+    longer matched term is not reported separately. This is intentionally
+    dependency-free (no spaCy, no ML).
     """
     if not text:
         return []
 
     found: list[str] = []
     seen: set[str] = set()
-
-    for skill_lower, canonical in _SKILLS_LOWER.items():
-        # Word-boundary pattern; escape for skills with special chars (C++, .NET)
-        pattern = (
-            r"(?<![A-Za-z0-9.+#])" + re.escape(skill_lower) + r"(?![A-Za-z0-9.+#])"
-        )
-        if re.search(pattern, text, re.IGNORECASE) and skill_lower not in seen:
-            seen.add(skill_lower)
-            found.append(canonical)
-
+    claimed: list[tuple[int, int]] = []  # spans already matched by a longer term
+    for pattern, canon in _SKILL_PATTERNS:
+        for m in pattern.finditer(text):
+            # "Oracle" inside "Oracle Cloud" or "Spring" inside "Spring Boot"
+            # belongs to the longer skill, which was matched first.
+            if any(s <= m.start() and m.end() <= e for s, e in claimed):
+                continue
+            claimed.append(m.span())
+            if canon not in seen:
+                seen.add(canon)
+                found.append(canon)
     return found
+
+
+def split_outside_parens(text: str, separators: str = ",;|•●") -> list[str]:
+    """
+    Split on any separator character that isn't inside parentheses.
+
+    "AWS (EC2, S3), Docker" → ["AWS (EC2, S3)", "Docker"]
+    """
+    parts: list[str] = []
+    depth = 0
+    current: list[str] = []
+    for ch in text:
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}" and depth:
+            depth -= 1
+        if ch in separators and depth == 0:
+            parts.append("".join(current))
+            current = []
+        else:
+            current.append(ch)
+    parts.append("".join(current))
+    return [p.strip() for p in parts if p.strip()]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -427,7 +405,7 @@ def _detect_columns(blocks: list, page_width: float) -> list[tuple[float, float]
     return [(0.0, page_width)]
 
 
-def _extract_page_text(page) -> str:  # page: fitz.Page
+def _extract_page_text(page) -> str:  # page: pymupdf.Page
     """
     Extract text from one PDF page, respecting multi-column layout.
 
@@ -491,59 +469,29 @@ def extract_text_from_pdf(file_path: str | Path) -> str:
     Raises ValueError if no text could be extracted.
     """
     try:
-        import fitz  # PyMuPDF
+        import pymupdf
     except ImportError as exc:
-        raise ImportError("PyMuPDF (fitz) is required: pip install pymupdf") from exc
+        raise ImportError("PyMuPDF is required: pip install pymupdf") from exc
 
     file_path = Path(file_path)
     if not file_path.exists():
         raise FileNotFoundError(f"PDF not found: {file_path}")
 
     log.info("Extracting text from: %s", file_path.name)
-    doc = fitz.open(str(file_path))
     pages_text: list[str] = []
+    with pymupdf.open(str(file_path)) as doc:
+        for page_num, page in enumerate(doc):
+            text = _extract_page_text(page)
+            if text.strip():
+                pages_text.append(text)
+                log.debug("Page %d: %d chars", page_num + 1, len(text))
 
-    for page_num, page in enumerate(doc):
-        text = _extract_page_text(page)
-        if text.strip():
-            pages_text.append(text)
-            log.debug("Page %d: %d chars", page_num + 1, len(text))
-
-    doc.close()
     full_text = "\n\n".join(pages_text)
 
     if not full_text.strip():
         raise ValueError(f"No extractable text in: {file_path.name}")
 
     log.info("Extracted %d chars from %d pages", len(full_text), len(pages_text))
-    return full_text
-
-
-def extract_text_from_bytes(pdf_bytes: bytes) -> str:
-    """
-    Extract full text from an in-memory PDF (e.g., uploaded file bytes).
-
-    Raises ValueError if no text could be extracted.
-    """
-    try:
-        import fitz
-    except ImportError as exc:
-        raise ImportError("PyMuPDF (fitz) is required: pip install pymupdf") from exc
-
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    pages_text: list[str] = []
-
-    for page in doc:
-        text = _extract_page_text(page)
-        if text.strip():
-            pages_text.append(text)
-
-    doc.close()
-    full_text = "\n\n".join(pages_text)
-
-    if not full_text.strip():
-        raise ValueError("No extractable text in uploaded PDF.")
-
     return full_text
 
 
@@ -641,12 +589,16 @@ def merge_continuation_lines(lines: list[str]) -> list[str]:
         return []
 
     merged: list[str] = []
-    for ln in lines:
+    for i, ln in enumerate(lines):
         if not ln:
             continue
 
+        # A line directly above a date line is an entry header ("Granite
+        # Bank" / "Jul 2020 - Aug 2025"), never the tail of a wrapped bullet.
+        next_is_date = i + 1 < len(lines) and bool(DATE_RANGE.search(lines[i + 1]))
+
         is_cont = False
-        if merged:
+        if merged and not next_is_date:
             prev = merged[-1]
             prev_s = prev.rstrip()
             prev_words = prev_s.split()
@@ -679,6 +631,7 @@ def merge_continuation_lines(lines: list[str]) -> list[str]:
                     len(ln) < 50
                     and not ROLE_SEP_RE.search(ln)
                     and BULLET_INLINE_RE.match(prev)
+                    and not prev_s.endswith((".", "!", "?"))
                     and not re.match(r"^[A-Z][A-Za-z\s]+,\s*[A-Z][A-Za-z]+", ln)
                 ):
                     is_cont = True
@@ -724,9 +677,16 @@ def extract_date_range(text: str) -> str:
     return f"{m.group(1).strip()} - {m.group(2).strip()}" if m else ""
 
 
+def extract_date_ranges(text: str) -> str:
+    """All date ranges in text, joined: "Jan 2026 - Apr 2026, Sep 2026 - Present"."""
+    return ", ".join(
+        f"{m.group(1).strip()} - {m.group(2).strip()}" for m in DATE_RANGE.finditer(text)
+    )
+
+
 def remove_date_range(text: str) -> str:
-    """Strip any date range from text, trimming trailing punctuation."""
-    return DATE_RANGE.sub("", text).strip().rstrip("|,–-—").strip()
+    """Strip every date range from text, trimming leftover punctuation."""
+    return DATE_RANGE.sub("", text).strip(" |,–-—")
 
 
 def extract_location(text: str) -> tuple[str, str]:
@@ -741,6 +701,27 @@ def extract_location(text: str) -> tuple[str, str]:
         cleaned = LOCATION_RE.sub("", text).strip().rstrip("|,–-—").strip()
         return cleaned, loc
     return text, ""
+
+
+_PLACE_PART_RE = re.compile(r"^[A-Z][A-Za-z.'\-]*(?:\s+[A-Z][A-Za-z.'\-]*){0,3}$")
+
+
+def is_location_line(text: str) -> bool:
+    """
+    True for a line that is only a place: "Remote", "Boston, MA",
+    "Boston, MA, USA", "Pune, Maharashtra, India".
+
+    Requires 2-4 comma-separated, capitalized parts with no digits and no
+    company or job-title words, so "Google, Inc." and "Engineer, Platform"
+    are rejected.
+    """
+    s = text.strip().rstrip(".")
+    if s.lower() == "remote":
+        return True
+    parts = [p.strip() for p in s.split(",")]
+    if not 2 <= len(parts) <= 4 or any(not _PLACE_PART_RE.match(p) for p in parts):
+        return False
+    return not COMPANY_HINTS_RE.search(s) and not ROLE_WORD_RE.search(s)
 
 
 def split_role_and_company(header: str) -> tuple[str, str]:

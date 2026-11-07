@@ -23,12 +23,10 @@ The returned dict strictly matches the Stage 1 → Stage 2 JSON contract:
 Architecture:
     Step 1  Normalize (handle LinkedIn single-line pastes)
     Step 2  Extract title + company (heuristic, best-effort)
-    Step 3  Extract experience_years
-    Step 4  Zone-based line classification (required / preferred / skip)
-    Step 5  Fallback if no zones detected
-    Step 6  Per-zone skill extraction + deduplication
-    Step 7  Build requirement_sentences with type tags
-    Step 8  Assemble final dict
+    Step 3  Zone-based line classification (required / preferred / skip)
+    Step 4  Fallback if no zones detected
+    Step 5  Experience years + per-zone skill extraction
+    Step 6  Build requirement_sentences with type tags
 """
 
 from __future__ import annotations
@@ -69,7 +67,6 @@ _REQUIRED_HEADER = re.compile(
     r"|What\s+(?:We|You)\s+Need(?:\s+To\s+Succeed)?"
     r"|What\s+You\s+(?:Bring|Need|Need\s+To\s+Succeed)"
     r"|Qualifications?"
-    r"|Minimum\s+Qualifications?"
     r")\s*:?\s*$",
     re.IGNORECASE,
 )
@@ -77,7 +74,6 @@ _REQUIRED_HEADER = re.compile(
 _PREFERRED_HEADER = re.compile(
     r"^\s*(?:"
     r"(?:Preferred|Desired|Additional|Bonus)\s+(?:Qualifications?|Skills?|Requirements?)"
-    r"|Nice\s+to\s+Have"
     r"|Nice\s+to\s+Haves?"
     r"|What\s+(?:Sets\s+You\s+Apart|Would\s+Be\s+Nice)"
     r"|(?:A\s+)?(?:Plus|Bonus)"
@@ -85,10 +81,16 @@ _PREFERRED_HEADER = re.compile(
     re.IGNORECASE,
 )
 
+# A short header that merely *mentions* preferred qualifications, e.g.
+# "Additional Responsibilities & Preferred Qualifications:".
+_PREFERRED_HEADER_MENTION = re.compile(
+    r"\b(?:preferred|desired|bonus)\s+(?:qualifications?|skills?)\b|\bnice\s+to\s+haves?\b",
+    re.IGNORECASE,
+)
+
 _SKIP_HEADER = re.compile(
     r"^\s*(?:"
-    r"About\s+(?:the\s+)?(?:Job|Role|Team|Company|Us|Stripe|Tinder|Adobe|Intel|PayPal)"
-    r"|About\s+[A-Z][A-Za-z]+"          # "About Stripe", "About Tinder", etc.
+    r"About\s+(?:the\s+)?\w+"           # "About the Team", "About Stripe", ...
     r"|Who\s+We\s+Are"
     r"|Our\s+Mission"
     r"|Company\s+(?:Overview|Description)"
@@ -140,9 +142,8 @@ _SKIP_TRIGGER = re.compile(
     r"|This\s+(?:salary|hourly)"
     r"|We\s+may\s+use\s+artificial"
     r"|If\s+you\s+require\s+reasonable"
-    r"|Adobe\s+is\s+proud"
-    r"|PayPal\s+(?:provides|does\s+not)"
-    r"|Intel\s+is\s+committed"
+    r"|[A-Z]\w+\s+is\s+(?:proud|committed)\s+to"
+    r"|[A-Z]\w+\s+(?:provides\s+equal|does\s+not\s+(?:discriminate|charge))"
     r"|Annual\s+Salary\s+Range"
     r"|Expected\s+Pay\s+Range"
     r"|State-Specific\s+Notices"
@@ -180,9 +181,29 @@ _ROLE_KEYWORD_RE = re.compile(
     r"(?:software|senior|junior|staff|principal|lead|full\s*stack|"
     r"front\s*end|back\s*end|data|ml|machine\s+learning|ai|cloud|"
     r"devops|sre|platform|mobile|ios|android|web|security|qa|test)"
-    r"\s*(?:engineer|developer|scientist|architect|analyst|intern|manager)",
+    r"\s*(?:engineer|developer|scientist|architect|analyst|intern|manager)"
+    r"(?:\s+interns?\b)?",
     re.IGNORECASE,
 )
+
+# "Adobe is seeking ...", "PayPal has been ...", "At Tinder, we ..."
+_COMPANY_SENTENCE_RE = re.compile(
+    r"^(?:At\s+)?([A-Z][A-Za-z0-9&.]+(?:\s+[A-Z][A-Za-z0-9&.]+)?)"
+    r"(?:,\s+we\b|\s+(?:is|has\s+been|was|are)\s+)",
+    re.MULTILINE,
+)
+_NOT_A_COMPANY = frozenset(
+    {"the", "our", "we", "this", "you", "your", "as", "in", "it", "they", "there",
+     "what", "who", "how", "why", "when", "job", "team", "role", "company"}
+)
+
+_HIRING_VERB_RE = re.compile(r"\b(?:seeking|looking\s+for|hiring)\b", re.IGNORECASE)
+
+
+def _normalize_title(phrase: str) -> str:
+    """'software engineer interns' → 'Software Engineer Intern'."""
+    words = re.sub(r"\binterns\b", "intern", phrase.strip(), flags=re.IGNORECASE).split()
+    return " ".join(w if w.isupper() else w.capitalize() for w in words)
 
 _TITLE_SKIP_RE = re.compile(
     r"^(?:About|Who\s+(?:We|You)|Our\s+Mission|Program|Where|Commitment|#|"
@@ -207,12 +228,14 @@ def _extract_title_and_company(text: str) -> tuple[str, str]:
     if m:
         return m.group(1).strip(), m.group(2).strip()
 
-    # Pattern 2: "Company — Title" or "Title | Company" on first line
+    # Pattern 2: "Company — Title" or "Title | Company" on first line.
+    # The part naming a role is the title; otherwise assume "Title | Company".
     m = re.match(r"^(.+?)\s*[|–—]\s*(.+)$", lines[0])
     if m:
         a, b = m.group(1).strip(), m.group(2).strip()
-        # Longer part is likely company
-        return (b, a) if len(a) < len(b) else (a, b)
+        if _ROLE_KEYWORD_RE.search(b) and not _ROLE_KEYWORD_RE.search(a):
+            return b, a
+        return a, b
 
     # Pattern 3: "As a [Title] at [Company]" anywhere in first 3 000 chars
     m = re.search(
@@ -225,15 +248,23 @@ def _extract_title_and_company(text: str) -> tuple[str, str]:
             title = candidate
             company = m.group(2).strip()
 
-    # Pattern 4: Scan early lines for a role keyword
+    # Pattern 4: Scan early lines for a role keyword — a short header line is
+    # the title as written; in a hiring sentence ("Adobe is seeking Software
+    # Engineer interns ...") only the role phrase is taken.
     if not title:
-        for ln in lines[:30]:
-            if len(ln) > 80 or _TITLE_SKIP_RE.match(ln) or ln.endswith("."):
+        for ln in lines[:40]:
+            if _TITLE_SKIP_RE.match(ln):
                 continue
-            if _ROLE_KEYWORD_RE.search(ln):
+            role_m = _ROLE_KEYWORD_RE.search(ln)
+            if not role_m:
+                continue
+            if len(ln) <= 80 and not ln.endswith("."):
                 title = re.sub(
                     r"^About\s+the\s+(?:job|role)\s*", "", ln, flags=re.IGNORECASE
                 ).strip()
+                break
+            if _HIRING_VERB_RE.search(ln[: role_m.start()]):
+                title = _normalize_title(role_m.group(0))
                 break
 
     # Pattern 5: Company from "About <CompanyName>"
@@ -248,6 +279,13 @@ def _extract_title_and_company(text: str) -> tuple[str, str]:
             _skip_words = {"the", "our", "this", "your", "team", "role", "job"}
             if candidate.lower() not in _skip_words:
                 company = candidate
+
+    # Pattern 6: Company as the subject of an opening sentence
+    if not company:
+        for m in _COMPANY_SENTENCE_RE.finditer(text[:3000]):
+            if m.group(1).split()[0].lower() not in _NOT_A_COMPANY:
+                company = m.group(1).strip()
+                break
 
     return title, company
 
@@ -302,6 +340,7 @@ def parse_jd(text: str) -> dict:
           "raw_text": str
         }
     """
+    raw_text = text or ""
     _empty: dict = {
         "title": "",
         "company": "",
@@ -311,7 +350,7 @@ def parse_jd(text: str) -> dict:
             "experience_years": None,
             "requirement_sentences": [],
         },
-        "raw_text": text or "",
+        "raw_text": raw_text,
     }
 
     if not text or not text.strip():
@@ -325,9 +364,7 @@ def parse_jd(text: str) -> dict:
     # ── Step 2: Title & company ───────────────────────────────────────────────
     title, company = _extract_title_and_company(text)
 
-    # experience_years resolved after zone extraction (Step 3b below)
-
-    # ── Step 4: Zone-based line classification ────────────────────────────────
+    # ── Step 3: Zone-based line classification ────────────────────────────────
     lines = text.strip().split("\n")
 
     required_lines: list[str] = []
@@ -346,7 +383,11 @@ def parse_jd(text: str) -> dict:
         if _REQUIRED_HEADER.match(stripped):
             zone = "required"
             continue
-        if _PREFERRED_HEADER.match(stripped):
+        if _PREFERRED_HEADER.match(stripped) or (
+            len(stripped) < 80
+            and stripped.endswith(":")
+            and _PREFERRED_HEADER_MENTION.search(stripped)
+        ):
             zone = "preferred"
             continue
         if _SKIP_HEADER.match(stripped):
@@ -388,18 +429,20 @@ def parse_jd(text: str) -> dict:
             preferred_lines.append(stripped)
         # "responsibilities" and "skip" are discarded (not in JD contract output)
 
-    # ── Step 5: Fallback — no zones detected → classify by signal words ───────
+    # ── Step 4: Fallback — no zones detected → classify by signal words ───────
     if not required_lines and not preferred_lines:
+        # No length filter here: a terse JD ("Python, Go") is still a list of
+        # skills. Short fragments are dropped later, from the sentences only.
         for ln in lines:
             stripped = ln.strip()
-            if not stripped or len(stripped) < 15:
+            if not stripped:
                 continue
             if _PREFERRED_SIGNALS.search(stripped):
                 preferred_lines.append(stripped)
             else:
                 required_lines.append(stripped)
 
-    # ── Step 6: Skill extraction per zone ─────────────────────────────────────
+    # ── Step 5: Experience years + skill extraction per zone ──────────────────
     required_text = "\n".join(required_lines)
     preferred_text = "\n".join(preferred_lines)
 
@@ -418,7 +461,7 @@ def parse_jd(text: str) -> dict:
     required_skills = sorted(required_skill_set)
     preferred_skills = sorted(preferred_only)
 
-    # ── Step 7: Build requirement_sentences with type tags ────────────────────
+    # ── Step 6: Build requirement_sentences with type tags ────────────────────
     req_sentences = _clean_lines_to_sentences(required_lines)
     pref_sentences = _clean_lines_to_sentences(preferred_lines)
 
@@ -449,5 +492,5 @@ def parse_jd(text: str) -> dict:
             "experience_years": experience_years,
             "requirement_sentences": requirement_sentences,
         },
-        "raw_text": text,
+        "raw_text": raw_text,
     }
