@@ -25,6 +25,7 @@ import shutil
 import tempfile
 import time
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -64,20 +65,6 @@ CORS_ORIGINS = os.getenv(
 
 # ── App setup ────────────────────────────────────────────────────────────────
 
-app = FastAPI(
-    title="ResumeAI API",
-    version="1.0.0",
-    description="Analyze resumes against job descriptions and generate tailored PDFs",
-)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=CORS_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 
 def _purge_stale_jobs() -> None:
     """Drop job directories older than the TTL. Best-effort, never fatal."""
@@ -92,11 +79,28 @@ def _purge_stale_jobs() -> None:
             log.debug("Could not purge %s", entry, exc_info=True)
 
 
-@app.on_event("startup")
-async def _on_startup() -> None:
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
     JOBS_DIR.mkdir(parents=True, exist_ok=True)
     _purge_stale_jobs()
     log.info("Jobs directory: %s (TTL %ds)", JOBS_DIR, JOB_TTL_SECONDS)
+    yield
+
+
+app = FastAPI(
+    title="ResumeAI API",
+    version="1.0.0",
+    description="Analyze resumes against job descriptions and generate tailored PDFs",
+    lifespan=_lifespan,
+)
+
+# No cookies or auth headers are used, so credentials stay disabled.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=CORS_ORIGINS,
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
+)
 
 
 async def _save_upload(upload: UploadFile, dest: Path) -> None:
@@ -134,8 +138,12 @@ async def health():
 
 @app.post("/api/analyze")
 async def analyze(
-    resume: UploadFile = File(..., description="Resume PDF file"),
+    resume: UploadFile = File(..., description="Resume PDF file"),  # noqa: B008
     jd_text: str = Form(..., description="Raw job description text"),
+    add_missing_skills: bool = Form(
+        False,
+        description="Append the JD's missing skills to the tailored resume's skills section",
+    ),
 ):
     """
     Full pipeline: PDF + JD text → scored JSON + tailored PDF.
@@ -168,6 +176,7 @@ async def analyze(
                 jd_text,
                 output_dir=job_dir,
                 filename_stem="tailored_resume",
+                add_missing_skills=add_missing_skills,
             )
     except HTTPException:
         shutil.rmtree(job_dir, ignore_errors=True)
@@ -179,7 +188,11 @@ async def analyze(
         raise HTTPException(
             status_code=500,
             detail="Analysis failed. Please try again or use a different PDF.",
-        )
+        ) from None
+    finally:
+        # The uploaded résumé is personal data and is no longer needed; only
+        # the generated PDF stays until the TTL purge.
+        pdf_path.unlink(missing_ok=True)
 
     scored = result.scored
     assembled = result.assembled
@@ -198,7 +211,7 @@ async def analyze(
             "partial_match": scored["skills_analysis"].get("partial_match", []),
         },
         "gap_report": assembled.get("gap_report", {}),
-        "contact": result.resume.get("contact", {}),
+        "injected_skills": result.injected_skills,
         "jd_meta": {
             "title": result.jd.get("title", ""),
             "company": result.jd.get("company", ""),

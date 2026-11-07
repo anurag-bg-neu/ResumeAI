@@ -12,25 +12,11 @@ That's exactly the point. We use this as a comparison against the semantic model
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
+from .bullets import iter_bullets
 
-def get_all_bullets(resume):
-    """Pull every bullet point out of the resume into a flat list with section labels."""
-    bullets = []
-
-    for exp in resume["sections"].get("experience", []):
-        for b in exp.get("bullets", []):
-            bullets.append({"text": b, "section": "experience"})
-
-    for proj in resume["sections"].get("projects", []):
-        for b in proj.get("bullets", []):
-            bullets.append({"text": b, "section": "projects"})
-
-    # education usually doesn't have bullets, but handle it just in case
-    for edu in resume["sections"].get("education", []):
-        for detail in edu.get("details", []):
-            bullets.append({"text": detail, "section": "education"})
-
-    return bullets
+# Below this cosine similarity a bullet shares no meaningful vocabulary with
+# any requirement, so no "best match" is reported.
+MATCH_FLOOR: float = 0.01
 
 
 def score_with_tfidf(resume, jd):
@@ -43,39 +29,41 @@ def score_with_tfidf(resume, jd):
     3. For each bullet, compute cosine similarity against each requirement
     4. Each bullet's score = its best-matching requirement score (max across all requirements)
     """
+    bullets = [(section, text) for section, _, _, text in iter_bullets(resume)]
+    req_texts = [r["text"] for r in jd["requirements"]["requirement_sentences"]]
 
-    bullets = get_all_bullets(resume)
-    requirements = jd["requirements"]["requirement_sentences"]
-
-    # just the raw text strings
-    bullet_texts = [b["text"] for b in bullets]
-    req_texts = [r["text"] for r in requirements]
+    # A JD with no parseable requirement sentences (e.g. "Python, Go") leaves
+    # nothing to compare against: every bullet scores 0 instead of crashing.
+    if not bullets or not req_texts:
+        return [
+            {"text": text, "section": section, "keyword_score": 0.0, "best_match_requirement": None}
+            for section, text in bullets
+        ]
 
     # fit TF-IDF on everything together so word frequencies are calibrated across the full corpus
-    all_texts = bullet_texts + req_texts
+    bullet_texts = [text for _, text in bullets]
     vectorizer = TfidfVectorizer(stop_words="english")
-    tfidf_matrix = vectorizer.fit_transform(all_texts)
+    try:
+        tfidf_matrix = vectorizer.fit_transform(bullet_texts + req_texts)
+    except ValueError:  # every token was a stop word: empty vocabulary
+        return [
+            {"text": text, "section": section, "keyword_score": 0.0, "best_match_requirement": None}
+            for section, text in bullets
+        ]
 
     # split back out: first N rows are bullets, rest are requirements
-    bullet_vectors = tfidf_matrix[:len(bullet_texts)]
-    req_vectors = tfidf_matrix[len(bullet_texts):]
-
     # cosine_similarity returns a matrix: rows = bullets, cols = requirements
-    sim_matrix = cosine_similarity(bullet_vectors, req_vectors)
+    sim_matrix = cosine_similarity(tfidf_matrix[: len(bullets)], tfidf_matrix[len(bullets) :])
 
-    # attach a keyword score to each bullet
     scored_bullets = []
-    for i, bullet in enumerate(bullets):
-        scores_against_all_reqs = sim_matrix[i]  # one score per requirement
-        best_score = float(max(scores_against_all_reqs))
-        best_req_idx = int(scores_against_all_reqs.argmax())
-        best_req_text = req_texts[best_req_idx] if best_score > 0.01 else None
-
+    for i, (section, text) in enumerate(bullets):
+        best_req_idx = int(sim_matrix[i].argmax())
+        best_score = float(sim_matrix[i][best_req_idx])
         scored_bullets.append({
-            "text": bullet["text"],
-            "section": bullet["section"],
+            "text": text,
+            "section": section,
             "keyword_score": round(best_score, 4),
-            "best_match_requirement": best_req_text
+            "best_match_requirement": req_texts[best_req_idx] if best_score > MATCH_FLOOR else None,
         })
 
     return scored_bullets

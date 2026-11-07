@@ -49,7 +49,12 @@ class PipelineResult(AnalysisResult):
     pdf_path: str | None = None
 
 
-def analyze(resume_pdf: str | Path, jd_text: str) -> AnalysisResult:
+def analyze(
+    resume_pdf: str | Path,
+    jd_text: str = "",
+    *,
+    jd: dict | None = None,
+) -> AnalysisResult:
     """
     Run Stages 1 and 2.
 
@@ -59,6 +64,8 @@ def analyze(resume_pdf: str | Path, jd_text: str) -> AnalysisResult:
                     the API already holds text and the CLI reads the file, so
                     keeping path handling out of here is what lets both callers
                     share this function.
+        jd:         An already-parsed JD dict (from parse_jd or a saved JSON).
+                    When given, jd_text is ignored and JD parsing is skipped.
     """
     log.info("Stage 1 — parsing resume: %s", resume_pdf)
     resume = parse_resume(str(resume_pdf))
@@ -69,14 +76,16 @@ def analyze(resume_pdf: str | Path, jd_text: str) -> AnalysisResult:
         len(resume["all_skills_detected"]),
     )
 
-    log.info("Stage 1 — parsing JD (%d chars)", len(jd_text))
-    jd = parse_jd(jd_text)
+    if jd is None:
+        log.info("Stage 1 — parsing JD (%d chars)", len(jd_text))
+        jd = parse_jd(jd_text)
     log.info("JD role: %s @ %s", jd.get("title", "?"), jd.get("company", "?"))
 
     log.info("Stage 2 — scoring resume against JD")
     scored = score_resume(resume, jd)
 
-    # The assembler needs contact details, which only the parsed resume has.
+    # Keep contact details with the scores so a saved scored JSON is
+    # self-contained (the CLI's --scored mode has no parsed resume).
     scored["contact"] = resume.get("contact", {})
 
     log.info(
@@ -89,23 +98,27 @@ def analyze(resume_pdf: str | Path, jd_text: str) -> AnalysisResult:
 
 def run_pipeline(
     resume_pdf: str | Path,
-    jd_text: str,
+    jd_text: str = "",
     *,
+    jd: dict | None = None,
     output_dir: str | Path | None = None,
     filename_stem: str = "tailored_resume",
-    add_missing_skills: bool = True,
+    add_missing_skills: bool = False,
 ) -> PipelineResult:
     """
     Run all three stages.
 
     Args:
+        jd_text, jd:        As for analyze().
         output_dir:         Where to write the PDF. None skips PDF generation
                             entirely, which is what makes this cheap to test.
         filename_stem:      PDF filename without the extension.
         add_missing_skills: Append the JD's missing skills to the skills section
-                            before rendering, for ATS keyword coverage.
+                            before rendering, for ATS keyword coverage. Off by
+                            default: it lists skills the candidate may not have,
+                            so callers must opt in.
     """
-    analysis = analyze(resume_pdf, jd_text)
+    analysis = analyze(resume_pdf, jd_text, jd=jd)
 
     log.info("Stage 3 — assembling tailored resume")
     assembled = assemble_resume(analysis.scored, analysis.jd, resume=analysis.resume)
