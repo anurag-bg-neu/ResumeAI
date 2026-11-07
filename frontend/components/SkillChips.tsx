@@ -1,6 +1,6 @@
 "use client";
 
-interface PartialMatch {
+export interface PartialMatch {
   jd_skill: string;
   similarity: number;
   closest_bullet: string;
