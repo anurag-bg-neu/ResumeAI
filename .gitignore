@@ -4,15 +4,14 @@ __pycache__/
 *.egg-info/
 .venv/
 venv/
+.pytest_cache/
+.ruff_cache/
 
-# Build / run artifacts
+# Build / run artifacts (the API keeps its jobs in the OS temp dir)
 backend/results/
-backend/_jobs/
-test_output.pdf
-report.pdf
 
 # Real resumes are personal data — keep them out of git.
-# The one synthetic fixture the README and tests rely on is the exception.
+# The one synthetic fixture the README and smoke test rely on is the exception.
 backend/data/sample_resumes/*.pdf
 !backend/data/sample_resumes/resume.pdf
 
@@ -26,6 +25,7 @@ frontend/*.tsbuildinfo
 .env
 .env.local
 
-# Editor / local tooling
+# Editor / OS / local tooling
 .vscode/
 .idea/
+.DS_Store
