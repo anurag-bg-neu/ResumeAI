@@ -2,16 +2,9 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import ScoreRing from "@/components/ScoreRing";
-import SkillChips from "@/components/SkillChips";
+import SkillChips, { type PartialMatch } from "@/components/SkillChips";
 
-/* ── Types ──────────────────────────────────────────────────────────────── */
-
-interface PartialMatch {
-  jd_skill: string;
-  similarity: number;
-  closest_bullet: string;
-  note: string;
-}
+/* ── Types (mirror the /api/analyze response) ───────────────────────────── */
 
 interface ExperienceEntry {
   company: string;
@@ -33,14 +26,8 @@ interface AnalysisResult {
     missing: string[];
     partial_match: PartialMatch[];
   };
-  gap_report: {
-    missing_skills: string[];
-    partial_matches: PartialMatch[];
-    jd_title: string;
-    jd_company: string;
-    recommendation: string;
-  };
-  contact: { name: string; email: string };
+  gap_report: { recommendation: string };
+  injected_skills: string[];
   jd_meta: { title: string; company: string };
   experience_count: number;
   project_count: number;
@@ -59,23 +46,36 @@ export default function Home() {
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [error, setError] = useState("");
   const [dragOver, setDragOver] = useState(false);
+  const [fileError, setFileError] = useState("");
+  const [addMissingSkills, setAddMissingSkills] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   /* ── File handlers ──────────────────────────────────────────────────── */
 
-  const onDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setDragOver(false);
-    const dropped = e.dataTransfer.files[0];
-    if (dropped?.type === "application/pdf") {
-      setFile(dropped);
+  // Same rule for drag-and-drop and the file picker: PDFs only, and say so.
+  const pickFile = useCallback((picked: File | undefined) => {
+    if (!picked) return;
+    if (!picked.name.toLowerCase().endsWith(".pdf")) {
+      setFileError(`"${picked.name}" is not a PDF.`);
+      return;
     }
+    setFileError("");
+    setFile(picked);
   }, []);
 
-  const onFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const selected = e.target.files?.[0];
-    if (selected) setFile(selected);
-  }, []);
+  const onDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      setDragOver(false);
+      pickFile(e.dataTransfer.files[0]);
+    },
+    [pickFile],
+  );
+
+  const onFileChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => pickFile(e.target.files?.[0]),
+    [pickFile],
+  );
 
   /* ── Submit ─────────────────────────────────────────────────────────── */
 
@@ -88,6 +88,7 @@ export default function Home() {
     const formData = new FormData();
     formData.append("resume", file);
     formData.append("jd_text", jdText);
+    formData.append("add_missing_skills", String(addMissingSkills));
 
     try {
       const res = await fetch("/api/analyze", {
@@ -113,6 +114,7 @@ export default function Home() {
 
   const handleReset = () => {
     setFile(null);
+    setFileError("");
     setJdText("");
     setResult(null);
     setError("");
@@ -201,6 +203,9 @@ export default function Home() {
                 </div>
               )}
             </div>
+            {fileError && (
+              <p className="mt-2 text-sm text-red-600">{fileError}</p>
+            )}
           </div>
 
           {/* JD textarea */}
@@ -220,6 +225,22 @@ export default function Home() {
               onChange={(e) => setJdText(e.target.value)}
             />
           </div>
+
+          {/* Opt-in: listing skills on a resume is a claim about the candidate */}
+          <label className="flex items-start gap-3 text-sm text-gray-700">
+            <input
+              type="checkbox"
+              className="mt-0.5 h-4 w-4 rounded border-gray-300 text-brand-600 focus:ring-brand-500"
+              checked={addMissingSkills}
+              onChange={(e) => setAddMissingSkills(e.target.checked)}
+            />
+            <span>
+              Add the job&apos;s missing skills to my tailored resume
+              <span className="block text-xs text-gray-500">
+                Only tick this if you actually have those skills.
+              </span>
+            </span>
+          </label>
 
           {/* Submit */}
           <button
@@ -337,6 +358,17 @@ export default function Home() {
               </h3>
               <p className="text-sm leading-relaxed text-blue-700">
                 {result.gap_report.recommendation}
+              </p>
+            </div>
+          )}
+
+          {result.injected_skills.length > 0 && (
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 p-6 shadow-sm">
+              <h3 className="mb-2 text-sm font-semibold text-amber-800">
+                Added to your tailored resume&apos;s skills
+              </h3>
+              <p className="text-sm text-amber-700">
+                {result.injected_skills.join(", ")}
               </p>
             </div>
           )}
