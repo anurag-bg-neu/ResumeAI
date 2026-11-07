@@ -10,10 +10,11 @@ though they don't share many words — the embeddings know they mean similar thi
 We use the all-MiniLM-L6-v2 model from sentence-transformers. It's small and fast,
 which matters when we're scoring 40+ bullets against 8+ requirements.
 
-We also do section weighting: experience bullets count more than education bullets
-because the JD is for a software engineering role (not a research or academic position).
+We also do section weighting: experience bullets count more than project bullets
+for a typical engineering JD, and the reverse for a research-leaning one.
 """
 
+from .bullets import SCORED_SECTIONS, iter_bullets
 from .embeddings import cos_sim, encode
 
 # Below this similarity, a "best match" is noise rather than a real match, so we
@@ -36,7 +37,6 @@ def get_section_weight(jd):
     weights = {
         "experience": 1.5,  # default: experience matters most for eng roles
         "projects": 1.0,
-        "education": 0.5,   # education bullets are usually not very relevant
     }
 
     # if the JD specifically calls out research, publications, or academic projects, boost projects
@@ -76,11 +76,9 @@ def score_with_semantic(resume, jd):
     flat_bullets: list[str] = []
     origins: list[tuple[str, int, int]] = []  # (section_name, entry_idx, bullet_idx)
 
-    for section_name in ("experience", "projects"):
-        for entry_idx, item in enumerate(resume["sections"].get(section_name, [])):
-            for bullet_idx, bullet_text in enumerate(item.get("bullets", [])):
-                flat_bullets.append(bullet_text)
-                origins.append((section_name, entry_idx, bullet_idx))
+    for section_name, entry_idx, bullet_idx, bullet_text in iter_bullets(resume):
+        flat_bullets.append(bullet_text)
+        origins.append((section_name, entry_idx, bullet_idx))
 
     # ── Encode ───────────────────────────────────────────────────────────────
     # sims[i][j] = similarity of flat_bullets[i] to req_texts[j].
@@ -117,7 +115,7 @@ def score_with_semantic(resume, jd):
         }
 
     # ── Rebuild ──────────────────────────────────────────────────────────────
-    for section_name in ("experience", "projects"):
+    for section_name in SCORED_SECTIONS:
         weight = section_weights.get(section_name, 1.0)
 
         for entry_idx, item in enumerate(resume["sections"].get(section_name, [])):
@@ -148,19 +146,22 @@ def score_with_semantic(resume, jd):
 
 def compute_overall_semantic_score(scored_sections):
     """
-    Average of all bullet semantic scores, weighted by section weight.
+    Weighted mean of all bullet semantic scores (weights = section weights).
     This is the single number that represents how well this resume matches this JD.
+
+    Dividing by the total weight, not the bullet count, keeps the result on the
+    same 0-1 scale as the individual scores.
     """
     total_score = 0.0
-    total_bullets = 0
+    total_weight = 0.0
 
-    for section_name in ["experience", "projects"]:
+    for section_name in SCORED_SECTIONS:
         for entry in scored_sections.get(section_name, []):
             weight = entry.get("section_weight", 1.0)
             for bullet in entry.get("bullets", []):
                 total_score += bullet["semantic_score"] * weight
-                total_bullets += 1
+                total_weight += weight
 
-    if total_bullets == 0:
+    if total_weight == 0:
         return 0.0
-    return round(total_score / total_bullets, 4)
+    return round(total_score / total_weight, 4)

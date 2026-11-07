@@ -1,0 +1,6 @@
+# Tests, smoke test and linting — on top of the other two files:
+#   pip install -r requirements.txt -r requirements-api.txt -r requirements-dev.txt
+pytest>=8.0
+httpx>=0.27              # fastapi.testclient
+requests>=2.31.0         # scripts/smoke_api.py
+ruff>=0.6
