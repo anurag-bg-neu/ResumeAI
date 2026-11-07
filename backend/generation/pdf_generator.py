@@ -12,13 +12,16 @@ reportlab renderer matches original resume layout exactly:
                 "Courses: ..."  normal weight, indented
   - Skills:     categorized, bold label + normal skills
   - Experience: company bold-left / dates right, title+location sub-line, bullets
-  - Projects:   name bold | description italic, bullets
-  - Extra sections (Publications, Leadership, Achievements):
+  - Projects:   name bold | description italic | tech stack, bullets
+  - Extra sections (Publications, Leadership, Achievements, Certifications):
       heading lines → bold only, normal weight for description lines
       bullet lines  → normal weight  (• marker)
       dates         → right-aligned beside heading
   - No orphan/empty bullet markers
   - Compact 9pt font targeting 2-page output
+
+Both renderers produce the same sections. Résumé text is escaped for the
+target markup (reportlab's mini-HTML, LaTeX) before it is interpolated.
 """
 
 from __future__ import annotations
@@ -29,13 +32,14 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
+from xml.sax.saxutils import escape as _xml
 
-from jinja2 import Environment, BaseLoader
+from jinja2 import BaseLoader, Environment
 
 log = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# LaTeX TEMPLATE  (unchanged — pdflatex path)
+# LaTeX TEMPLATE  (pdflatex path)
 # ─────────────────────────────────────────────────────────────────────────────
 _LATEX_TEMPLATE = r"""
 \documentclass[letterpaper,11pt]{article}
@@ -60,41 +64,49 @@ _LATEX_TEMPLATE = r"""
 \newcommand{\resumeItemListEnd}{\end{itemize}\vspace{-5pt}}
 \begin{document}
 \begin{center}
-\textbf{\Huge\scshape{{ contact.name|default('')|le }}}\\[3pt]\small
-{{ contact.phone|default('')|le }}
-{% if contact.phone and contact.email %} $|$ {% endif %}
-\href{mailto:{{ contact.email|default('') }}}{\underline{{{ contact.email|default('')|le }}}}
-{% if contact.linkedin %} $|$ \href{https://{{ contact.linkedin }}}{\underline{{{ contact.linkedin|le }}}} {% endif %}
-{% if contact.location %} $|$ {{ contact.location|le }} {% endif %}
+\textbf{\Huge\scshape << contact.name|default('')|le >>}\\[3pt]\small
+<< contact.phone|default('')|le >>
+<% if contact.phone and contact.email %> $|$ <% endif %>
+\href{mailto:<< contact.email|default('')|url >>}{\underline{<< contact.email|default('')|le >>}}
+<% if contact.linkedin %> $|$ \href{https://<< contact.linkedin|url >>}{\underline{<< contact.linkedin|le >>}} <% endif %>
+<% if contact.location %> $|$ << contact.location|le >> <% endif %>
 \end{center}
 \section{Education}
 \resumeSubHeadingListStart
-{% for edu in education %}
-\resumeSubheading{{{ edu.degree|default('')|le }}{% if edu.details %} ({{ edu.details|join(', ')|le }}){% endif %}}{{{ edu.dates|default('')|le }}}{{{ edu.school|default('')|le }}}{}
-{% if edu.courses %}\resumeItemListStart\resumeItem{\textit{Courses: {{ edu.courses|le }}}}\resumeItemListEnd{% endif %}
-{% endfor %}
+<% for edu in education %>
+\resumeSubheading{<< edu.degree|default('')|le >><% if edu.details %> (<< edu.details|join(' | ')|le >>)<% endif %>}{<< edu.dates|default('')|le >>}{<< edu.school|default('')|le >>}{}
+<% if edu.courses %>\resumeItemListStart\resumeItem{\textit{Courses: << edu.courses|le >>}}\resumeItemListEnd<% endif %>
+<% endfor %>
 \resumeSubHeadingListEnd
 \section{Skills}
 \begin{itemize}[leftmargin=0.15in,label={}]\small{\item{
-{% for cat in skills.categorized %}\textbf{{{ cat.category|le }}}{: {{ cat.skills|join(', ')|le }}} \\
-{% endfor %}
+<% for cat in skills.categorized %>\textbf{<< cat.category|le >>}{: << cat.skills|join(', ')|le >>} \\
+<% endfor %>
 }}\end{itemize}
 \section{Experience}
 \resumeSubHeadingListStart
-{% for exp in experience %}
-\resumeSubheading{{{ exp.company|default('')|le }}}{{{ exp.dates|default('')|le }}}{{{ exp.title|default('')|le }}}{{{ exp.location|default('')|le }}}
-\resumeItemListStart{% for b in exp.bullets %}\resumeItem{{{ b|le }}}{% endfor %}\resumeItemListEnd
-{% endfor %}
+<% for exp in experience %>
+\resumeSubheading{<< exp.company|default('')|le >>}{<< exp.dates|default('')|le >>}{<< exp.title|default('')|le >>}{<< exp.location|default('')|le >>}
+\resumeItemListStart<% for b in exp.bullets %>\resumeItem{<< b|le >>}<% endfor %>\resumeItemListEnd
+<% endfor %>
 \resumeSubHeadingListEnd
-{% if projects %}
+<% if projects %>
 \section{Projects}
 \resumeSubHeadingListStart
-{% for proj in projects %}
-\resumeProjectHeading{\textbf{{{ proj.name|default('')|le }}}{% if proj.description %} $|$ \emph{\small{{ proj.description|le }}}{% endif %}}{}
-\resumeItemListStart{% for b in proj.bullets %}\resumeItem{{{ b|le }}}{% endfor %}\resumeItemListEnd
-{% endfor %}
+<% for proj in projects %>
+\resumeProjectHeading{\textbf{<< proj.name|default('')|le >>}<% if proj.description %> $|$ \emph{\small << proj.description|le >>}<% endif %><% if proj.technologies %> $|$ \small << proj.technologies|join(', ')|le >><% endif %>}{}
+\resumeItemListStart<% for b in proj.bullets %>\resumeItem{<< b|le >>}<% endfor %>\resumeItemListEnd
+<% endfor %>
 \resumeSubHeadingListEnd
-{% endif %}
+<% endif %>
+<% for label, items in extras %>
+\section{ <<- label|le ->> }
+\resumeSubHeadingListStart
+<% for item in items %><% if item.type == 'heading' %>\item\textbf{ <<- item.text|le ->> }<% if item.date %>\hfill << item.date|le >><% endif %>
+<% else %>\resumeItemListStart\resumeItem{ <<- item.text|le ->> }\resumeItemListEnd
+<% endif %><% endfor %>
+\resumeSubHeadingListEnd
+<% endfor %>
 \end{document}
 """
 
@@ -124,19 +136,25 @@ def _le(t):
     return _LRE.sub(lambda m: _LS[m.group(0)], str(t)) if t else ""
 
 
+def _url(t):
+    """Keep only characters that are safe inside a LaTeX \\href URL."""
+    return re.sub(r"[^\w.@/:+\-]", "", str(t)) if t else ""
+
+
 def _build_jinja_env():
     env = Environment(
         loader=BaseLoader(),
-        variable_start_string="{{",
-        variable_end_string="}}",
-        block_start_string="{%",
-        block_end_string="%}",
+        # LaTeX is full of { } and %, so Jinja uses delimiters LaTeX never does.
+        variable_start_string="<<",
+        variable_end_string=">>",
+        block_start_string="<%",
+        block_end_string="%>",
         comment_start_string="##(",
         comment_end_string=")##",
         autoescape=False,
     )
     env.filters["le"] = _le
-    env.filters["latex_escape"] = _le
+    env.filters["url"] = _url
     return env
 
 
@@ -203,7 +221,7 @@ def _parse_extra_lines(raw: str) -> list[dict]:
             result.append({"type": "heading", "text": t, "date": pending_date})
         pending = pending_type = pending_date = ""
 
-    def _is_continuation(clean: str, prev_type: str) -> bool:
+    def _is_continuation(clean: str) -> bool:
         """
         A line is a continuation (wraps from the previous line) if:
         - starts lowercase
@@ -244,9 +262,7 @@ def _parse_extra_lines(raw: str) -> list[dict]:
             pending_type = "bullet"
         else:
             # Continuation of current pending item?
-            if pending_type in ("bullet", "heading") and _is_continuation(
-                clean, pending_type
-            ):
+            if pending_type in ("bullet", "heading") and _is_continuation(clean):
                 pending = pending + " " + clean
                 continue
 
@@ -266,12 +282,39 @@ def _parse_extra_lines(raw: str) -> list[dict]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# SHARED SECTION DATA  (both renderers read these, so they stay in sync)
+# ─────────────────────────────────────────────────────────────────────────────
+
+EXTRA_ORDER: list[tuple[str, str]] = [
+    ("publications", "RESEARCH & PUBLICATIONS"),
+    ("leadership", "LEADERSHIP AND TEACHING EXPERIENCE"),
+    ("achievements", "ACHIEVEMENTS & EXTRACURRICULAR ACTIVITIES"),
+    ("certifications", "CERTIFICATIONS"),
+]
+
+
+def _skill_categories(skills) -> list[dict]:
+    """skills is {"flat", "categorized"} from the assembler, or a bare list."""
+    if isinstance(skills, dict):
+        return skills.get("categorized", [])
+    return [{"category": "Skills", "skills": list(skills)}] if skills else []
+
+
+def _extra_sections(extra: dict) -> list[tuple[str, list[dict]]]:
+    """[(heading, parsed lines)] for each non-empty extra section, in EXTRA_ORDER."""
+    return [
+        (label, _parse_extra_lines(extra[key].strip()))
+        for key, label in EXTRA_ORDER
+        if extra.get(key, "").strip()
+    ]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # REPORTLAB — STYLES
 # ─────────────────────────────────────────────────────────────────────────────
-def _styles(inch):
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.lib import colors
-    from reportlab.lib.enums import TA_CENTER, TA_RIGHT, TA_LEFT
+def _styles():
+    from reportlab.lib.enums import TA_CENTER, TA_RIGHT
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 
     S = getSampleStyleSheet()
     BASE = 9.0  # compact base size → 2-page target
@@ -394,14 +437,6 @@ def _styles(inch):
             spaceAfter=0,
             leading=12,
         ),
-        "footer": ParagraphStyle(
-            "RF",
-            parent=S["Normal"],
-            fontSize=7.5,
-            textColor=__import__("reportlab").lib.colors.grey,
-            alignment=TA_CENTER,
-            spaceBefore=4,
-        ),
     }
 
 
@@ -425,7 +460,7 @@ def _full_hr(avail_w, colors):
     )
 
 
-def _two_col(left_para, right_para, avail_w, date_w, inch):
+def _two_col(left_para, right_para, avail_w, date_w):
     """Table: left content, right content right-aligned."""
     from reportlab.platypus import Table, TableStyle
 
@@ -450,17 +485,16 @@ def _two_col(left_para, right_para, avail_w, date_w, inch):
 
 
 def _generate_with_reportlab(data: dict, output_pdf: Path) -> None:
+    from reportlab.lib import colors
     from reportlab.lib.pagesizes import letter
     from reportlab.lib.units import inch
-    from reportlab.lib import colors
+    from reportlab.pdfbase.pdfmetrics import stringWidth
     from reportlab.platypus import (
         BaseDocTemplate,
         Frame,
         PageTemplate,
         Paragraph,
         Spacer,
-        Table,
-        TableStyle,
     )
 
     contact = data.get("contact", {})
@@ -469,21 +503,22 @@ def _generate_with_reportlab(data: dict, output_pdf: Path) -> None:
     education = data.get("education", [])
     skills_d = data.get("skills", {})
     extra = data.get("extra_sections", {})
-    jd_meta = data.get("jd_meta", {})
-    scores = data.get("overall_scores", {})
-
-    skills_cats = (
-        skills_d.get("categorized", [])
-        if isinstance(skills_d, dict)
-        else [{"category": "Skills", "skills": skills_d}]
-    )
-    skills_flat = skills_d.get("flat", []) if isinstance(skills_d, dict) else skills_d
+    skills_cats = _skill_categories(skills_d)
 
     LM = RM = 0.45 * inch  # 0.45" margins — matches original tight layout
     TM = 0.38 * inch
     BM = 0.45 * inch
     avail_w = letter[0] - LM - RM  # exact usable width in points
-    DATE_W = 1.45 * inch
+    # Right-hand date column: wide enough for the longest date on the page
+    # ("Jan 2026 - Apr 2026, Sep 2026 - Present"), but never under 1.45".
+    longest_date = max(
+        (
+            stringWidth(e.get("dates", ""), "Helvetica-Bold", 9.0)
+            for e in [*experience, *education]
+        ),
+        default=0.0,
+    )
+    DATE_W = min(max(1.45 * inch, longest_date + 6), avail_w / 2)
 
     # Use BaseDocTemplate + explicit Frame with zero padding so that
     # HRFlowable(width=avail_w) and Paragraph text both use the exact
@@ -508,7 +543,7 @@ def _generate_with_reportlab(data: dict, output_pdf: Path) -> None:
         id="main",
     )
     doc.addPageTemplates([PageTemplate(id="main", frames=[frame])])
-    S = _styles(inch)
+    S = _styles()
     story = []
 
     # ── helpers ───────────────────────────────────────────────────────────────
@@ -523,23 +558,21 @@ def _generate_with_reportlab(data: dict, output_pdf: Path) -> None:
         """Render a bullet. If text matches 'Bold Label: rest', bold the label."""
         if not text.strip():
             return
-        # Pattern: short bold label before first colon (≤40 chars, no period inside)
-        import re as _re
-
-        m = _re.match(r"^([^:.]{1,45}):\s(.+)$", text, _re.DOTALL)
+        # Pattern: short bold label before first colon (≤45 chars, no period inside)
+        m = re.match(r"^([^:.]{1,45}):\s(.+)$", text, re.DOTALL)
         if m:
-            label = m.group(1).strip()
-            rest = m.group(2).strip()
+            label = _xml(m.group(1).strip())
+            rest = _xml(m.group(2).strip())
             rendered = f"\u2022\u00a0<b>{label}:</b> {rest}"
         else:
-            rendered = f"\u2022\u00a0{text}"
+            rendered = f"\u2022\u00a0{_xml(text)}"
         story.append(Paragraph(rendered, S["bullet"]))
 
     def two_col(left_p, right_p):
-        story.append(_two_col(left_p, right_p, avail_w, DATE_W, inch))
+        story.append(_two_col(left_p, right_p, avail_w, DATE_W))
 
     # ── HEADER ────────────────────────────────────────────────────────────────
-    story.append(Paragraph(contact.get("name", ""), S["name"]))
+    story.append(Paragraph(_xml(contact.get("name", "")), S["name"]))
     parts = [
         p
         for p in [
@@ -551,24 +584,23 @@ def _generate_with_reportlab(data: dict, output_pdf: Path) -> None:
         if p
     ]
     if parts:
-        story.append(Paragraph(" | ".join(parts), S["contact"]))
+        story.append(Paragraph(_xml(" | ".join(parts)), S["contact"]))
     story.append(_full_hr(avail_w, colors))
 
     # ── EDUCATION ─────────────────────────────────────────────────────────────
     section("EDUCATION")
     for edu in education:
         details = " | ".join(edu.get("details", []))
-        deg = edu.get("degree", "")
-        sch = edu.get("school", "")
-        gpa = f" ({details})" if details else ""
-        dates = edu.get("dates", "")
+        heading = " \u2013 ".join(p for p in (edu.get("degree", ""), edu.get("school", "")) if p)
+        if details:
+            heading += f" ({details})"
         # Single bold line: "Degree - School (GPA)"  |  dates right
         two_col(
-            Paragraph(f"<b>{deg} \u2013 {sch}{gpa}</b>", S["edu"]),
-            Paragraph(dates, S["edu_right"]),
+            Paragraph(f"<b>{_xml(heading)}</b>", S["edu"]),
+            Paragraph(_xml(edu.get("dates", "")), S["edu_right"]),
         )
         if edu.get("courses"):
-            story.append(Paragraph(f"Courses: {edu['courses']}", S["courses"]))
+            story.append(Paragraph(_xml(f"Courses: {edu['courses']}"), S["courses"]))
     gap(3)
 
     # ── SKILLS ────────────────────────────────────────────────────────────────
@@ -576,7 +608,7 @@ def _generate_with_reportlab(data: dict, output_pdf: Path) -> None:
     for cat in skills_cats:
         story.append(
             Paragraph(
-                f"<b>{cat['category']}</b>: {', '.join(cat.get('skills', []))}",
+                f"<b>{_xml(cat['category'])}</b>: {_xml(', '.join(cat.get('skills', [])))}",
                 S["skill"],
             )
         )
@@ -586,13 +618,11 @@ def _generate_with_reportlab(data: dict, output_pdf: Path) -> None:
     section("EXPERIENCE")
     for exp in experience:
         two_col(
-            Paragraph(f"<b>{exp.get('company','')}</b>", S["exp_co"]),
-            Paragraph(exp.get("dates", ""), S["exp_co_r"]),
+            Paragraph(f"<b>{_xml(exp.get('company', ''))}</b>", S["exp_co"]),
+            Paragraph(_xml(exp.get("dates", "")), S["exp_co_r"]),
         )
-        title_loc = exp.get("title", "")
-        if exp.get("location"):
-            title_loc += f" \u2013 {exp['location']}"
-        story.append(Paragraph(title_loc, S["exp_sub"]))
+        title_loc = " \u2013 ".join(p for p in (exp.get("title", ""), exp.get("location", "")) if p)
+        story.append(Paragraph(_xml(title_loc), S["exp_sub"]))
         for b in exp.get("bullets", []):
             bul(b)
         gap(2)
@@ -601,52 +631,32 @@ def _generate_with_reportlab(data: dict, output_pdf: Path) -> None:
     if projects:
         section("PROJECTS")
         for proj in projects:
-            head = f"<b>{proj.get('name','')}</b>"
+            head = f"<b>{_xml(proj.get('name', ''))}</b>"
             if proj.get("description"):
-                head += f" | <i>{proj['description']}</i>"
+                head += f" | <i>{_xml(proj['description'])}</i>"
+            if proj.get("technologies"):
+                head += f" | {_xml(', '.join(proj['technologies']))}"
             story.append(Paragraph(head, S["exp_co"]))
             for b in proj.get("bullets", []):
                 bul(b)
             gap(2)
 
     # ── EXTRA SECTIONS ────────────────────────────────────────────────────────
-    EXTRA_ORDER = [
-        ("publications", "RESEARCH & PUBLICATIONS"),
-        ("leadership", "LEADERSHIP AND TEACHING EXPERIENCE"),
-        ("achievements", "ACHIEVEMENTS & EXTRACURRICULAR ACTIVITIES"),
-        ("certifications", "CERTIFICATIONS"),
-    ]
-
-    for key, label in EXTRA_ORDER:
-        raw = extra.get(key, "").strip()
-        if not raw:
-            continue
+    for label, items in _extra_sections(extra):
         section(label)
-        for item in _parse_extra_lines(raw):
+        for item in items:
             if item["type"] == "heading":
                 if item.get("date"):
                     two_col(
-                        Paragraph(item["text"], S["ex_head"]),
-                        Paragraph(item["date"], S["ex_head_r"]),
+                        Paragraph(_xml(item["text"]), S["ex_head"]),
+                        Paragraph(_xml(item["date"]), S["ex_head_r"]),
                     )
                 else:
                     # Long paper titles etc — bold, full width
-                    story.append(Paragraph(item["text"], S["ex_head"]))
+                    story.append(Paragraph(_xml(item["text"]), S["ex_head"]))
             else:  # bullet — normal weight
                 bul(item["text"])
         gap(2)
-
-    # ── FOOTER ────────────────────────────────────────────────────────────────
-    sem = int(scores.get("semantic", 0.0) * 100)
-    jd_lbl = jd_meta.get("title", "")
-    if jd_meta.get("company"):
-        jd_lbl += f" at {jd_meta['company']}"
-    if jd_lbl or sem:
-        story.append(
-            Paragraph(
-                f"Tailored for: {jd_lbl} \u2014 Semantic match: {sem}%", S["footer"]
-            )
-        )
 
     doc.build(story)
     log.info("reportlab PDF → %s", output_pdf)
@@ -658,15 +668,10 @@ def _generate_with_reportlab(data: dict, output_pdf: Path) -> None:
 
 
 def _generate_with_pdflatex(data: dict, output_pdf: Path) -> None:
-    env = _build_jinja_env()
-    tmpl = env.from_string(_LATEX_TEMPLATE)
-    sd = data.get("skills", {})
+    tmpl = _build_jinja_env().from_string(_LATEX_TEMPLATE)
     ld = dict(data)
-    if not isinstance(sd, dict):
-        ld["skills"] = {
-            "flat": sd,
-            "categorized": [{"category": "Skills", "skills": sd}],
-        }
+    ld["skills"] = {"categorized": _skill_categories(data.get("skills", {}))}
+    ld["extras"] = _extra_sections(data.get("extra_sections", {}))
     src = tmpl.render(**ld)
     with tempfile.TemporaryDirectory() as td:
         tex = Path(td) / "r.tex"
@@ -686,7 +691,8 @@ def _generate_with_pdflatex(data: dict, output_pdf: Path) -> None:
         )
         pdf = Path(td) / "r.pdf"
         if res.returncode != 0 or not pdf.exists():
-            raise RuntimeError(f"pdflatex exit {res.returncode}")
+            # pdflatex reports errors on stdout; keep the tail for the log.
+            raise RuntimeError(f"pdflatex exit {res.returncode}: {res.stdout[-800:]}")
         shutil.copy2(str(pdf), str(output_pdf))
     log.info("pdflatex → %s", output_pdf)
 

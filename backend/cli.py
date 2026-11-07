@@ -24,9 +24,10 @@ python cli.py \\
     --add-missing-skills \\
     --output results/
 
-# Use pre-scored JSON (skip Stage 1 + 2 if already computed)
+# Re-assemble from a previous run's scores (skip Stage 1 + 2). Every single-JD
+# run writes <stem>_scored.json next to its PDF for exactly this.
 python cli.py \\
-    --scored results/scored.json \\
+    --scored results/tailored_resume_jd1_scored.json \\
     --jd-json data/mock_data/sample_jd.json \\
     --add-missing-skills \\
     --output results/
@@ -43,7 +44,7 @@ Arguments
 --resume            Path to master resume PDF (Stage 1 input)
 --jd                Path to a single JD .txt file (Stage 1 input)
 --jd-json           Path to a pre-parsed JD JSON file (skip Stage 1 JD parsing)
---scored            Path to a pre-scored resume JSON (skip Stage 1 + 2 entirely)
+--scored            Path to a <stem>_scored.json from an earlier run (skip Stage 1 + 2)
 --add-missing-skills  Flag: inject missing JD skills into the skills section
 --multi-jd          Flag: run comparison across all JDs in --jd-dir
 --jd-dir            Directory with JD .txt files (default: data/sample_jds/)
@@ -175,13 +176,13 @@ def _stage3_generate(assembled: dict, output_dir: str, stem: str) -> str:
     return pdf_path
 
 
-def _save_gap_report_json(gap_report: dict, output_dir: str, stem: str) -> str:
-    """Save the gap report as a JSON file alongside the PDF."""
-    out_path = Path(output_dir) / f"{stem}_gap_report.json"
+def _save_json(data: dict, output_dir: str, filename: str, label: str) -> str:
+    """Write one of the run's JSON artifacts alongside the PDF."""
+    out_path = Path(output_dir) / filename
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as fh:
-        json.dump(gap_report, fh, indent=2)
-    print(f"  → Gap report saved: {out_path}")
+        json.dump(data, fh, indent=2)
+    print(f"  → {label} saved: {out_path}")
     return str(out_path)
 
 
@@ -223,7 +224,8 @@ def run_single_jd_pipeline(args: argparse.Namespace) -> None:
                 "raw_text": "",
             }
 
-        # No parsed resume here, so the assembler can't restore original bullets.
+        # No parsed resume here: skill categories and extra sections are
+        # unavailable, so the assembler falls back to the flat skill list.
         print("\n[Stage 3] Assembling tailored resume...")
         assembled = assemble_resume(scored, jd, resume=None)
         _print_assembly_summary(assembled)
@@ -240,17 +242,23 @@ def run_single_jd_pipeline(args: argparse.Namespace) -> None:
             print("[ERROR] Either --jd or --jd-json is required.")
             sys.exit(1)
 
-        jd_text = _read_jd_text(args.jd if args.jd else args.jd_json)
+        if args.jd:
+            jd_text, parsed_jd = _read_jd_text(args.jd), None
+        else:
+            print(f"\n[Stage 1] Loading pre-parsed JD JSON: {args.jd_json}")
+            with open(args.jd_json, encoding="utf-8") as fh:
+                jd_text, parsed_jd = "", json.load(fh)
 
         # output_dir=None: run stages 1-3 but defer PDF writing, because the
         # output filename depends on the JD company name we only learn here.
         result = run_pipeline(
             args.resume,
             jd_text,
+            jd=parsed_jd,
             output_dir=None,
             add_missing_skills=args.add_missing_skills,
         )
-        jd, assembled = result.jd, result.assembled
+        jd, assembled, scored = result.jd, result.assembled, result.scored
 
         _print_assembly_summary(assembled)
         _print_gap_report(assembled["gap_report"])
@@ -270,7 +278,9 @@ def run_single_jd_pipeline(args: argparse.Namespace) -> None:
         jd_slug = "resume"
     stem = f"tailored_resume_{jd_slug}"
     pdf_path = _stage3_generate(assembled, output_dir, stem)
-    _save_gap_report_json(assembled["gap_report"], output_dir, stem)
+    _save_json(assembled["gap_report"], output_dir, f"{stem}_gap_report.json", "Gap report")
+    if not args.scored:
+        _save_json(scored, output_dir, f"{stem}_scored.json", "Scores")
 
     _header("DONE")
     print(f"\n  PDF resume  : {pdf_path}")
@@ -324,16 +334,15 @@ def run_multi_jd_pipeline(args: argparse.Namespace) -> None:
     )
 
     scored_outputs: dict[str, dict] = {}
+    parsed_jds: dict[str, dict] = {}
 
     for jd_file in jd_files:
         print(f"\n[Stage 1+2] Processing JD: {jd_file.name}")
-        with open(jd_file, encoding="utf-8", errors="ignore") as fh:
-            jd_text = fh.read()
-        jd = parse_jd(jd_text)
+        jd = parse_jd(jd_file.read_text(encoding="utf-8", errors="ignore"))
         print(f"  → {jd.get('title', '?')} @ {jd.get('company', '?')}")
         scored = score_resume(resume, jd)
-        scored["contact"] = resume.get("contact", {})
         label = jd_file.stem
+        parsed_jds[label] = jd
         scored_outputs[label] = scored
         print(
             f"  → Semantic: {scored['overall_semantic_score']:.4f}  "
@@ -365,11 +374,9 @@ def run_multi_jd_pipeline(args: argparse.Namespace) -> None:
     )
 
     # Always generate a PDF for the best-matching JD in multi mode.
-    best_scored = scored_outputs[best_jd_label]
-    # Re-parse the best JD to get the full jd dict the assembler needs
-    best_jd_path = jd_dir / f"{best_jd_label}.txt"
-    best_jd = parse_jd(best_jd_path.read_text(encoding="utf-8", errors="ignore"))
-    assembled = assemble_resume(best_scored, best_jd, resume=resume)
+    assembled = assemble_resume(
+        scored_outputs[best_jd_label], parsed_jds[best_jd_label], resume=resume
+    )
     if args.add_missing_skills:
         _print_injected(inject_missing_skills(assembled, assembled["gap_report"]))
     pdf_path = _stage3_generate(assembled, output_dir, f"best_match_{best_jd_label}")

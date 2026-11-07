@@ -18,13 +18,17 @@ Public API:
 from __future__ import annotations
 
 import logging
-import os
 from pathlib import Path
-from typing import Any
 
-import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
+import matplotlib
+
+matplotlib.use("Agg")  # file output only; never needs a display
+
+import matplotlib.pyplot as plt  # noqa: E402
+import pandas as pd  # noqa: E402
+import seaborn as sns  # noqa: E402
+
+from scoring.bullets import SCORED_SECTIONS  # noqa: E402
 
 log = logging.getLogger(__name__)
 
@@ -46,25 +50,15 @@ def _truncate(text: str, max_len: int = 55) -> str:
     return text[:max_len] + "…" if len(text) > max_len else text
 
 
-def _collect_all_bullets(scored_output: dict) -> list[str]:
-    """Flatten all bullet texts from experience + projects into one ordered list."""
-    bullets: list[str] = []
-    for section in ["experience", "projects"]:
+def _bullet_scores(scored_output: dict) -> dict[str, float]:
+    """bullet text → semantic_score for every scored bullet, in résumé order."""
+    scores: dict[str, float] = {}
+    for section in SCORED_SECTIONS:
         for entry in scored_output.get("scored_sections", {}).get(section, []):
             for b in entry.get("bullets", []):
                 if b.get("text"):
-                    bullets.append(b["text"])
-    return bullets
-
-
-def _get_bullet_score(bullet_text: str, scored_output: dict) -> float:
-    """Look up the semantic_score for a bullet text in a scored output."""
-    for section in ["experience", "projects"]:
-        for entry in scored_output.get("scored_sections", {}).get(section, []):
-            for b in entry.get("bullets", []):
-                if b.get("text") == bullet_text:
-                    return float(b.get("semantic_score", 0.0))
-    return 0.0
+                    scores.setdefault(b["text"], float(b.get("semantic_score", 0.0)))
+    return scores
 
 
 def _classify_bullet(row: pd.Series) -> str:
@@ -118,24 +112,16 @@ def run_multi_jd_comparison(
             "heatmap_path": "",
         }
 
-    # Collect union of all bullet texts across all scored outputs
-    all_bullets_set: list[str] = []
-    seen: set[str] = set()
-
-    # Use the first scored_output to define bullet order (consistent ordering)
-    first_scored = next(iter(scored_outputs.values()))
-    for bullet in _collect_all_bullets(first_scored):
-        if bullet not in seen:
-            all_bullets_set.append(bullet)
-            seen.add(bullet)
+    # One text → score lookup per JD. The first JD's bullet order defines the
+    # row order (every JD scored the same résumé, so the bullets are the same).
+    jd_labels = list(scored_outputs.keys())
+    lookups = {label: _bullet_scores(scored_outputs[label]) for label in jd_labels}
+    all_bullets_set = list(lookups[jd_labels[0]])
 
     # Build score matrix: rows = bullets, columns = JD labels
-    jd_labels = list(scored_outputs.keys())
-    matrix_data: dict[str, list[float]] = {}
-
-    for label in jd_labels:
-        scored = scored_outputs[label]
-        matrix_data[label] = [_get_bullet_score(b, scored) for b in all_bullets_set]
+    matrix_data = {
+        label: [lookups[label].get(b, 0.0) for b in all_bullets_set] for label in jd_labels
+    }
 
     score_matrix = pd.DataFrame(matrix_data, index=[_truncate(b) for b in all_bullets_set])
     score_matrix.index.name = "Bullet"

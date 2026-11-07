@@ -3,18 +3,21 @@ assembler.py
 ------------
 Stage 3 — Resume Assembly Logic.
 
-Takes the scored dict from Stage 2 and the full resume dict from Stage 1,
-then applies structural decision rules:
+Takes the scored dict from Stage 2 (and, when available, the parsed resume
+from Stage 1) and applies these rules:
 
-  1. Experience Selection  — cut entries with avg_relevance < EXPERIENCE_CUT_THRESHOLD
-  2. Bullet Ordering       — sort bullets by semantic_score descending; keep ALL from
-                             original resume (scoring used for ORDER, not hard filtering)
-  3. Bullet Cap            — top entry gets up to 4 bullets, 2nd up to 3, 3rd up to 2, rest 1
-  4. Section Ordering      — driven by section_weight
-  5. Skills Curation       — use categorized skills from person1 if available;
-                             JD-matched skills promoted to front of each category
-  6. Extra Sections        — pass through publications, leadership, achievements
-  7. Gap Report            — missing + partial_match skills with actionable notes
+  1. Experience      — every job is kept, in résumé order (dropping a real job
+                       would leave an unexplained gap). Within each job,
+                       bullets are ordered by semantic score, best first.
+  2. Bullet Cap      — the most relevant job keeps up to BULLETS_BY_RANK[0]
+                       bullets, the next ones BULLETS_BY_RANK[1..], the rest
+                       MIN_BULLETS_PER_JOB.
+  3. Projects        — the MAX_PROJECTS most relevant, bullets best first.
+  4. Skills Curation — résumé categories kept; JD-covered skills promoted to
+                       the front of each category.
+  5. Extra Sections  — publications, leadership, achievements, certifications
+                       passed through.
+  6. Gap Report      — missing + partial_match skills with actionable notes.
 
 Public API:
     from generation.assembler import assemble_resume, inject_missing_skills
@@ -23,7 +26,8 @@ Public API:
 from __future__ import annotations
 
 import logging
-from typing import Any
+
+from parsing.utils import canonical_skill
 
 log = logging.getLogger(__name__)
 
@@ -31,11 +35,10 @@ log = logging.getLogger(__name__)
 # CONSTANTS
 # ─────────────────────────────────────────────────────────────────────────────
 
-EXPERIENCE_CUT_THRESHOLD: float = 0.25  # avg_relevance below this → cut entry
-BULLET_SCORE_THRESHOLD: float = 0.30  # used for ordering hint only; not hard filter
-
-# Max bullets per experience rank (index 0 = most relevant entry)
-BULLETS_BY_RANK: list[int] = [5, 4, 4, 4]  # keep all significant bullets per entry
+# Max bullets per job by relevance rank (index 0 = most relevant job).
+BULLETS_BY_RANK: list[int] = [5, 4, 4, 4]
+MIN_BULLETS_PER_JOB: int = 2
+MAX_PROJECTS: int = 3
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -43,171 +46,68 @@ BULLETS_BY_RANK: list[int] = [5, 4, 4, 4]  # keep all significant bullets per en
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _build_bullet_score_lookup(scored_sections: dict) -> dict[str, float]:
-    """Build a text → semantic_score lookup from all scored bullets."""
-    lookup: dict[str, float] = {}
-    for section in ["experience", "projects"]:
-        for entry in scored_sections.get(section, []):
-            for b in entry.get("bullets", []):
-                if b.get("text"):
-                    lookup[b["text"]] = b.get("semantic_score", 0.0)
-    return lookup
+def _bullets_best_first(entry: dict) -> list[str]:
+    """Bullet texts of a scored entry, highest semantic score first."""
+    ranked = sorted(
+        entry.get("bullets", []),
+        key=lambda b: b.get("semantic_score", 0.0),
+        reverse=True,
+    )
+    return [b["text"] for b in ranked]
 
 
-def _get_original_bullets(
-    entry_key: tuple[str, str],
-    resume: dict | None,
-    section: str,
-) -> list[str] | None:
-    """
-    Look up the original (unfiltered) bullets from the full resume dict.
-    Returns None if resume is not provided or entry not found.
-    entry_key = (company, title) or (name,) for projects.
-    """
-    if not resume:
-        return None
-    orig_entries = resume.get("sections", {}).get(section, [])
-    for e in orig_entries:
-        if section == "experience":
-            if (
-                e.get("company", "").strip() == entry_key[0].strip()
-                and e.get("title", "").strip() == entry_key[1].strip()
-            ):
-                return e.get("bullets", [])
-        else:  # projects
-            if e.get("name", "").strip() == entry_key[0].strip():
-                return e.get("bullets", [])
-    return None
-
-
-def _select_and_trim_experiences(
-    scored_experience: list[dict],
-    resume: dict | None,
-    bullet_lookup: dict[str, float],
-) -> list[dict]:
-    """
-    1. Filter entries below EXPERIENCE_CUT_THRESHOLD (keep at least top-2 fallback).
-    2. Sort survivors by avg_relevance descending.
-    3. For each entry, use ALL original bullets ordered by semantic score.
-       Apply a bullet cap by rank (4/3/2/1) — no hard score filter.
-    """
-    eligible = [
-        e
-        for e in scored_experience
-        if e.get("avg_relevance", 0.0) >= EXPERIENCE_CUT_THRESHOLD
-    ]
-
-    if not eligible:
-        eligible = sorted(
-            scored_experience, key=lambda e: e.get("avg_relevance", 0.0), reverse=True
-        )[:2]
-        log.warning(
-            "No experience entries passed threshold %.2f — using top-2 fallback",
-            EXPERIENCE_CUT_THRESHOLD,
-        )
-
-    eligible.sort(key=lambda e: e.get("avg_relevance", 0.0), reverse=True)
+def _assemble_experience(scored_experience: list[dict]) -> list[dict]:
+    """Keep every job in résumé order; cap and order bullets by relevance."""
+    by_relevance = sorted(
+        range(len(scored_experience)),
+        key=lambda i: scored_experience[i].get("avg_relevance", 0.0),
+        reverse=True,
+    )
+    rank_of = {idx: rank for rank, idx in enumerate(by_relevance)}
 
     assembled: list[dict] = []
-    for rank, entry in enumerate(eligible):
-        max_bullets = BULLETS_BY_RANK[rank] if rank < len(BULLETS_BY_RANK) else 1
-
-        # Prefer original (unfiltered) bullets from full resume
-        orig_bullets = _get_original_bullets(
-            (entry.get("company", ""), entry.get("title", "")),
-            resume,
-            "experience",
+    for idx, entry in enumerate(scored_experience):
+        rank = rank_of[idx]
+        cap = BULLETS_BY_RANK[rank] if rank < len(BULLETS_BY_RANK) else MIN_BULLETS_PER_JOB
+        bullets = _bullets_best_first(entry)[:cap]
+        assembled.append(
+            {
+                "company": entry.get("company", ""),
+                "title": entry.get("title", ""),
+                "dates": entry.get("dates", ""),
+                "location": entry.get("location", ""),
+                "bullets": bullets,
+                "avg_relevance": entry.get("avg_relevance", 0.0),
+            }
         )
-        if orig_bullets:
-            # Order by semantic score (best first), keep up to max_bullets
-            ordered = sorted(
-                orig_bullets,
-                key=lambda b: bullet_lookup.get(b, 0.0),
-                reverse=True,
-            )
-        else:
-            # Fall back to scored bullets text
-            sorted_scored = sorted(
-                entry.get("bullets", []),
-                key=lambda b: b.get("semantic_score", 0.0),
-                reverse=True,
-            )
-            ordered = [b["text"] for b in sorted_scored]
-
-        selected = ordered[:max_bullets] if ordered else []
-
-        assembled_entry = {
-            "company": entry.get("company", ""),
-            "title": entry.get("title", ""),
-            "dates": entry.get("dates", ""),
-            "location": entry.get("location", ""),
-            "bullets": selected,
-            "avg_relevance": entry.get("avg_relevance", 0.0),
-            "section_weight": entry.get("section_weight", 1.0),
-        }
-        assembled.append(assembled_entry)
         log.info(
             "Experience '%s' @ '%s': rank=%d, avg=%.3f, bullets=%d",
             entry.get("title", "?"),
             entry.get("company", "?"),
             rank,
             entry.get("avg_relevance", 0.0),
-            len(selected),
+            len(bullets),
         )
-
     return assembled
 
 
-def _select_and_trim_projects(
-    scored_projects: list[dict],
-    resume: dict | None,
-    bullet_lookup: dict[str, float],
-    max_projects: int = 3,
-) -> list[dict]:
-    """Sort projects by avg_relevance, keep top max_projects with ALL original bullets."""
-    sorted_projects = sorted(
+def _assemble_projects(scored_projects: list[dict]) -> list[dict]:
+    """The MAX_PROJECTS most relevant projects, bullets best first."""
+    ranked = sorted(
         scored_projects,
         key=lambda p: p.get("avg_relevance", 0.0),
         reverse=True,
     )
-
-    assembled: list[dict] = []
-    for proj in sorted_projects[:max_projects]:
-        orig_bullets = _get_original_bullets(
-            (proj.get("name", ""),), resume, "projects"
-        )
-        if orig_bullets:
-            ordered = sorted(
-                orig_bullets,
-                key=lambda b: bullet_lookup.get(b, 0.0),
-                reverse=True,
-            )
-        else:
-            sorted_scored = sorted(
-                proj.get("bullets", []),
-                key=lambda b: b.get("semantic_score", 0.0),
-                reverse=True,
-            )
-            ordered = [b["text"] for b in sorted_scored]
-
-        # Get original description from resume if available
-        orig_desc = proj.get("description", "")
-        if resume:
-            for p in resume.get("sections", {}).get("projects", []):
-                if p.get("name", "").strip() == proj.get("name", "").strip():
-                    orig_desc = p.get("description", "") or orig_desc
-                    break
-
-        assembled.append(
-            {
-                "name": proj.get("name", ""),
-                "description": orig_desc,
-                "bullets": ordered,
-                "avg_relevance": proj.get("avg_relevance", 0.0),
-            }
-        )
-
-    return assembled
+    return [
+        {
+            "name": proj.get("name", ""),
+            "description": proj.get("description", ""),
+            "technologies": proj.get("technologies", []),
+            "bullets": _bullets_best_first(proj),
+            "avg_relevance": proj.get("avg_relevance", 0.0),
+        }
+        for proj in ranked[:MAX_PROJECTS]
+    ]
 
 
 def _curate_skills(
@@ -221,14 +121,17 @@ def _curate_skills(
       - "categorized": list of {category, skills} with JD-matched skills
                        promoted to front of each category
 
-    Uses categorized structure from person1 if available.
+    Uses the résumé's own categories when the parser found them.
     """
-    covered_lower = {s.lower() for s in skills_analysis.get("covered", [])}
-    missing_lower = {s.lower() for s in skills_analysis.get("missing", [])}
+    covered = {canonical_skill(s).lower() for s in skills_analysis.get("covered", [])}
+
+    def _is_covered(skill: str) -> bool:
+        # "AWS (EC2, S3)" counts as AWS
+        return canonical_skill(skill.split(" (")[0]).lower() in covered
 
     # Build flat curated list (JD-matched first)
-    jd_matched = [s for s in scored_skills if s.lower() in covered_lower]
-    remaining = [s for s in scored_skills if s.lower() not in covered_lower]
+    jd_matched = [s for s in scored_skills if _is_covered(s)]
+    remaining = [s for s in scored_skills if not _is_covered(s)]
     flat = jd_matched + remaining
 
     # Build categorized list preserving original groups
@@ -237,8 +140,8 @@ def _curate_skills(
         for cat in skills_categorized:
             skills_in_cat = cat.get("skills", [])
             # Promote JD-covered skills to front within each category
-            matched = [s for s in skills_in_cat if s.lower() in covered_lower]
-            rest = [s for s in skills_in_cat if s.lower() not in covered_lower]
+            matched = [s for s in skills_in_cat if _is_covered(s)]
+            rest = [s for s in skills_in_cat if not _is_covered(s)]
             curated_cats.append(
                 {
                     "category": cat["category"],
@@ -246,7 +149,7 @@ def _curate_skills(
                 }
             )
     else:
-        # No categories from person1 — wrap flat list
+        # No categories in the résumé — wrap the flat list
         curated_cats = [{"category": "Skills", "skills": flat}]
 
     return {"flat": flat, "categorized": curated_cats}
@@ -301,7 +204,9 @@ def assemble_resume(
         scored_output: Output of scoring.scorer.score_resume().
         jd:            Parsed JD dict from parsing.jd_parser.parse_jd().
         resume:        Full resume dict from parsing.resume_parser.parse_resume().
-                       When provided, original bullets and extra sections are preserved.
+                       Supplies skill categories, extra sections and the full
+                       contact block; without it those fall back to what the
+                       scored dict carries.
 
     Returns dict with keys:
         contact, experience, projects, education, skills, extra_sections,
@@ -312,26 +217,9 @@ def assemble_resume(
         "skills_analysis", {"covered": [], "missing": [], "partial_match": []}
     )
 
-    bullet_lookup = _build_bullet_score_lookup(scored_sections)
-
-    experience = _select_and_trim_experiences(
-        scored_sections.get("experience", []), resume, bullet_lookup
-    )
-    projects = _select_and_trim_projects(
-        scored_sections.get("projects", []), resume, bullet_lookup
-    )
+    experience = _assemble_experience(scored_sections.get("experience", []))
+    projects = _assemble_projects(scored_sections.get("projects", []))
     education = scored_sections.get("education", [])
-
-    # Enrich education with courses if available from full resume
-    if resume:
-        for edu_entry in education:
-            for orig_edu in resume.get("sections", {}).get("education", []):
-                if orig_edu.get("school", "")[:30] in edu_entry.get(
-                    "school", ""
-                ) or edu_entry.get("school", "")[:30] in orig_edu.get("school", ""):
-                    if orig_edu.get("courses") and not edu_entry.get("courses"):
-                        edu_entry["courses"] = orig_edu["courses"]
-                    break
 
     # Skills: prefer categorized from full resume
     scored_skills = scored_sections.get("skills", [])
@@ -391,7 +279,8 @@ def inject_missing_skills(assembled: dict, gap_report: dict) -> list[str]:
     they appear on the generated PDF, improving ATS keyword coverage.
 
     Mutates `assembled` in place. Skills already present are skipped
-    (case-insensitive), which also makes this idempotent.
+    (compared by canonical name, so "k8s" is not added next to "Kubernetes"),
+    which also makes this idempotent.
 
     Returns the list of skills actually added, so callers can report it.
     """
@@ -409,8 +298,8 @@ def inject_missing_skills(assembled: dict, gap_report: dict) -> list[str]:
         flat = skills_data
         cats = [{"category": "Skills", "skills": list(skills_data)}]
 
-    existing_lower = {s.lower() for s in flat}
-    newly_added = [s for s in missing if s.lower() not in existing_lower]
+    existing = {canonical_skill(s).lower() for s in flat}
+    newly_added = [s for s in missing if canonical_skill(s).lower() not in existing]
 
     if not newly_added:
         log.info("No new skills to inject — all missing skills already present")
